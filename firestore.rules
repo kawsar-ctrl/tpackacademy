@@ -1,0 +1,489 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Primitive Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedAdminEmail() {
+      return isVerifiedUser() && request.auth.token.email == 'aayat6666@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdminEmail()
+        || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidStringList(listVal, maxItems) {
+      return listVal is list
+        && listVal.size() <= maxItems
+        && (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() <= 240));
+    }
+
+    function isValidMapList(listVal, maxItems) {
+      return listVal is list
+        && listVal.size() <= maxItems
+        && (listVal.size() == 0 || listVal[0] is map);
+    }
+
+    function isValidCategory(cat) {
+      return cat is string
+        && (cat == 'tpack-tech' || cat == 'pedagogy-eval' || cat == 'research-leadership');
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'email',
+          'displayName',
+          'designation',
+          'schoolName',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'email',
+          'displayName',
+          'designation',
+          'schoolName',
+          'photoUrl',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.uid is string
+        && data.uid.size() >= 1
+        && data.uid.size() <= 128
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 254
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 120
+        && data.designation is string
+        && data.designation.size() <= 120
+        && data.schoolName is string
+        && data.schoolName.size() <= 160
+        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLearnerProgress(data, userId) {
+      return data.keys().hasAll([
+          'userId',
+          'completedLessonIds',
+          'readMaterialIds',
+          'registeredSessionIds',
+          'quizResults',
+          'unlockedAchievementDates',
+          'lessonNotes',
+          'studySecondsByDate',
+          'activityCountByDate',
+          'helpfulDiscussionIds',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId',
+          'completedLessonIds',
+          'readMaterialIds',
+          'registeredSessionIds',
+          'quizResults',
+          'unlockedAchievementDates',
+          'lessonNotes',
+          'studySecondsByDate',
+          'activityCountByDate',
+          'helpfulDiscussionIds',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && isValidStringList(data.completedLessonIds, 50)
+        && isValidStringList(data.readMaterialIds, 50)
+        && isValidStringList(data.registeredSessionIds, 50)
+        && data.quizResults is map
+        && data.quizResults.size() <= 20
+        && data.unlockedAchievementDates is map
+        && data.unlockedAchievementDates.size() <= 30
+        && data.lessonNotes is map
+        && data.lessonNotes.size() <= 50
+        && data.studySecondsByDate is map
+        && data.studySecondsByDate.size() <= 366
+        && data.activityCountByDate is map
+        && data.activityCountByDate.size() <= 366
+        && isValidStringList(data.helpfulDiscussionIds, 200)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCustomCourse(data, courseId) {
+      return data.keys().hasAll([
+          'id',
+          'title',
+          'subtitle',
+          'category',
+          'categoryLabel',
+          'levelLabel',
+          'cpdHoursLabel',
+          'totalDurationLabel',
+          'instructor',
+          'instructorRole',
+          'imagePath',
+          'description',
+          'lessons',
+          'quiz',
+          'published',
+          'createdByUid',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'title',
+          'subtitle',
+          'category',
+          'categoryLabel',
+          'levelLabel',
+          'cpdHoursLabel',
+          'totalDurationLabel',
+          'instructor',
+          'instructorRole',
+          'imagePath',
+          'description',
+          'lessons',
+          'quiz',
+          'published',
+          'createdByUid',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.id is string
+        && data.id == courseId
+        && isValidId(data.id)
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 160
+        && data.subtitle is string
+        && data.subtitle.size() <= 240
+        && isValidCategory(data.category)
+        && data.categoryLabel is string
+        && data.categoryLabel.size() >= 1
+        && data.categoryLabel.size() <= 80
+        && data.levelLabel is string
+        && data.levelLabel.size() >= 1
+        && data.levelLabel.size() <= 80
+        && data.cpdHoursLabel is string
+        && data.cpdHoursLabel.size() >= 1
+        && data.cpdHoursLabel.size() <= 60
+        && data.totalDurationLabel is string
+        && data.totalDurationLabel.size() >= 1
+        && data.totalDurationLabel.size() <= 80
+        && data.instructor is string
+        && data.instructor.size() >= 1
+        && data.instructor.size() <= 120
+        && data.instructorRole is string
+        && data.instructorRole.size() <= 160
+        && data.imagePath is string
+        && data.imagePath.size() <= 100000
+        && data.description is string
+        && data.description.size() >= 1
+        && data.description.size() <= 1500
+        && isValidMapList(data.lessons, 25)
+        && isValidMapList(data.quiz, 30)
+        && data.published is bool
+        && data.createdByUid is string
+        && data.createdByUid.size() >= 1
+        && data.createdByUid.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUploadedMaterial(data, materialId) {
+      return data.keys().hasAll([
+          'id',
+          'courseId',
+          'courseTitle',
+          'category',
+          'categoryLabel',
+          'title',
+          'formatLabel',
+          'readTime',
+          'summary',
+          'keyPoints',
+          'actionChecklist',
+          'classroomActivity',
+          'attachmentName',
+          'attachmentContent',
+          'attachmentMimeType',
+          'published',
+          'createdByUid',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'courseId',
+          'courseTitle',
+          'category',
+          'categoryLabel',
+          'title',
+          'formatLabel',
+          'readTime',
+          'summary',
+          'keyPoints',
+          'actionChecklist',
+          'classroomActivity',
+          'attachmentName',
+          'attachmentContent',
+          'attachmentMimeType',
+          'published',
+          'createdByUid',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.id is string
+        && data.id == materialId
+        && isValidId(data.id)
+        && isValidId(data.courseId)
+        && data.courseTitle is string
+        && data.courseTitle.size() >= 1
+        && data.courseTitle.size() <= 160
+        && isValidCategory(data.category)
+        && data.categoryLabel is string
+        && data.categoryLabel.size() >= 1
+        && data.categoryLabel.size() <= 80
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 160
+        && data.formatLabel is string
+        && data.formatLabel.size() >= 1
+        && data.formatLabel.size() <= 60
+        && data.readTime is string
+        && data.readTime.size() >= 1
+        && data.readTime.size() <= 40
+        && data.summary is string
+        && data.summary.size() >= 1
+        && data.summary.size() <= 2000
+        && isValidStringList(data.keyPoints, 20)
+        && isValidStringList(data.actionChecklist, 20)
+        && data.classroomActivity is map
+        && data.classroomActivity.keys().hasAll(['gradeLevel', 'duration', 'objective'])
+        && data.classroomActivity.keys().hasOnly(['gradeLevel', 'duration', 'objective'])
+        && data.classroomActivity.gradeLevel is string
+        && data.classroomActivity.gradeLevel.size() <= 120
+        && data.classroomActivity.duration is string
+        && data.classroomActivity.duration.size() <= 120
+        && data.classroomActivity.objective is string
+        && data.classroomActivity.objective.size() <= 400
+        && data.attachmentName is string
+        && data.attachmentName.size() <= 180
+        && data.attachmentContent is string
+        && data.attachmentContent.size() <= 50000
+        && data.attachmentMimeType is string
+        && data.attachmentMimeType.size() <= 100
+        && data.published is bool
+        && data.createdByUid is string
+        && data.createdByUid.size() >= 1
+        && data.createdByUid.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Rules
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && isOwner(adminId);
+      allow list: if false;
+      allow write: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName',
+            'designation',
+            'schoolName',
+            'photoUrl',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if false;
+
+      // Master-Gated Progress Subcollection
+      match /progress/{progressId} {
+        allow get: if isValidId(userId)
+          && isValidId(progressId)
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow list: if false;
+
+        allow create: if isValidId(userId)
+          && isValidId(progressId)
+          && progressId == 'main'
+          && isOwner(userId)
+          && isValidLearnerProgress(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            exists(/databases/$(database)/documents/users/$(userId))
+            || existsAfter(/databases/$(database)/documents/users/$(userId))
+          );
+
+        allow update: if isValidId(userId)
+          && isValidId(progressId)
+          && progressId == 'main'
+          && isOwner(userId)
+          && isValidLearnerProgress(incoming(), userId)
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'completedLessonIds',
+              'readMaterialIds',
+              'registeredSessionIds',
+              'quizResults',
+              'unlockedAchievementDates',
+              'lessonNotes',
+              'studySecondsByDate',
+              'activityCountByDate',
+              'helpfulDiscussionIds',
+              'updatedAt'
+            ])
+          );
+
+        allow delete: if false;
+      }
+    }
+
+    match /courses/{courseId} {
+      allow get: if isValidId(courseId) && (existing().published == true || isAdmin());
+      allow list: if existing().published == true || isBootstrappedAdminEmail();
+
+      allow create: if isValidId(courseId)
+        && isAdmin()
+        && isValidCustomCourse(incoming(), courseId)
+        && incoming().createdByUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(courseId)
+        && isAdmin()
+        && isValidCustomCourse(incoming(), courseId)
+        && incoming().id == existing().id
+        && incoming().createdByUid == existing().createdByUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title',
+          'subtitle',
+          'category',
+          'categoryLabel',
+          'levelLabel',
+          'cpdHoursLabel',
+          'totalDurationLabel',
+          'instructor',
+          'instructorRole',
+          'imagePath',
+          'description',
+          'lessons',
+          'quiz',
+          'published',
+          'updatedAt'
+        ]);
+
+      allow delete: if isValidId(courseId) && isAdmin();
+    }
+
+    match /materials/{materialId} {
+      allow get: if isValidId(materialId) && (existing().published == true || isAdmin());
+      allow list: if existing().published == true || isBootstrappedAdminEmail();
+
+      allow create: if isValidId(materialId)
+        && isAdmin()
+        && isValidUploadedMaterial(incoming(), materialId)
+        && incoming().createdByUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(materialId)
+        && isAdmin()
+        && isValidUploadedMaterial(incoming(), materialId)
+        && incoming().id == existing().id
+        && incoming().createdByUid == existing().createdByUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'courseId',
+          'courseTitle',
+          'category',
+          'categoryLabel',
+          'title',
+          'formatLabel',
+          'readTime',
+          'summary',
+          'keyPoints',
+          'actionChecklist',
+          'classroomActivity',
+          'attachmentName',
+          'attachmentContent',
+          'attachmentMimeType',
+          'published',
+          'updatedAt'
+        ]);
+
+      allow delete: if isValidId(materialId) && isAdmin();
+    }
+  }
+}

@@ -1,0 +1,378 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated teacher profile information and school affiliation.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the document ID.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified Google account email address.",
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Teacher display name used on certificates and forum posts.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "designation": {
+          "type": "string",
+          "description": "Teacher role or designation at their school.",
+          "maxLength": 120
+        },
+        "schoolName": {
+          "type": "string",
+          "description": "Teacher school or institution name.",
+          "maxLength": 160
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "Optional profile avatar URL.",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last profile update."
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "displayName",
+        "designation",
+        "schoolName",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LearnerProgressDoc": {
+      "title": "LearnerProgressDoc",
+      "description": "Authenticated teacher LMS training progress, quiz results, lesson notes, and study time.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "completedLessonIds": {
+          "type": "array",
+          "description": "IDs of completed course lessons (max 50)."
+        },
+        "readMaterialIds": {
+          "type": "array",
+          "description": "IDs of read or downloaded lesson materials (max 50)."
+        },
+        "registeredSessionIds": {
+          "type": "array",
+          "description": "IDs of registered live training sessions (max 50)."
+        },
+        "quizResults": {
+          "type": "object",
+          "description": "Best quiz outcomes keyed by course ID."
+        },
+        "unlockedAchievementDates": {
+          "type": "object",
+          "description": "Unlocked digital badge dates keyed by achievement ID."
+        },
+        "lessonNotes": {
+          "type": "object",
+          "description": "Personal lesson notebook entries and optional voice reflection metadata keyed by lesson ID."
+        },
+        "studySecondsByDate": {
+          "type": "object",
+          "description": "Recorded study seconds keyed by YYYY-MM-DD."
+        },
+        "activityCountByDate": {
+          "type": "object",
+          "description": "Recorded learning activities count keyed by YYYY-MM-DD."
+        },
+        "helpfulDiscussionIds": {
+          "type": "array",
+          "description": "IDs of discussion posts marked helpful (max 200)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when progress tracking started."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest progress sync."
+        }
+      },
+      "required": [
+        "userId",
+        "completedLessonIds",
+        "readMaterialIds",
+        "registeredSessionIds",
+        "quizResults",
+        "unlockedAchievementDates",
+        "lessonNotes",
+        "studySecondsByDate",
+        "activityCountByDate",
+        "helpfulDiscussionIds",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CustomCourseDoc": {
+      "title": "CustomCourseDoc",
+      "description": "Dynamic training course uploaded or created from the Admin Panel.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "category": {
+          "type": "string",
+          "enum": ["tpack-tech", "pedagogy-eval", "research-leadership"]
+        },
+        "categoryLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "levelLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "cpdHoursLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "totalDurationLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "instructor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "instructorRole": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "imagePath": {
+          "type": "string",
+          "maxLength": 100000
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "lessons": {
+          "type": "array",
+          "description": "Course lessons with embedded chapters and lesson material (max 25)."
+        },
+        "quiz": {
+          "type": "array",
+          "description": "Course evaluation quiz questions (max 30)."
+        },
+        "published": {
+          "type": "boolean"
+        },
+        "createdByUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "subtitle",
+        "category",
+        "categoryLabel",
+        "levelLabel",
+        "cpdHoursLabel",
+        "totalDurationLabel",
+        "instructor",
+        "instructorRole",
+        "imagePath",
+        "description",
+        "lessons",
+        "quiz",
+        "published",
+        "createdByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UploadedMaterialDoc": {
+      "title": "UploadedMaterialDoc",
+      "description": "Standalone training material or lesson handout uploaded via the Admin Panel.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "courseId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "courseTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "category": {
+          "type": "string",
+          "enum": ["tpack-tech", "pedagogy-eval", "research-leadership"]
+        },
+        "categoryLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "formatLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "readTime": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "keyPoints": {
+          "type": "array"
+        },
+        "actionChecklist": {
+          "type": "array"
+        },
+        "classroomActivity": {
+          "type": "object"
+        },
+        "attachmentName": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "attachmentContent": {
+          "type": "string",
+          "maxLength": 50000
+        },
+        "attachmentMimeType": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "published": {
+          "type": "boolean"
+        },
+        "createdByUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "courseId",
+        "courseTitle",
+        "category",
+        "categoryLabel",
+        "title",
+        "formatLabel",
+        "readTime",
+        "summary",
+        "keyPoints",
+        "actionChecklist",
+        "classroomActivity",
+        "attachmentName",
+        "attachmentContent",
+        "attachmentMimeType",
+        "published",
+        "createdByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Private teacher account profile document storing PII strictly accessible only by the authenticated owner."
+    },
+    "/users/{userId}/progress/{progressId}": {
+      "schema": {
+        "$ref": "#/entities/LearnerProgressDoc"
+      },
+      "description": "Teacher LMS learning progress subcollection gated by parent UserProfile existence and strict owner UID checks."
+    },
+    "/courses/{courseId}": {
+      "schema": {
+        "$ref": "#/entities/CustomCourseDoc"
+      },
+      "description": "Dynamic training courses created or uploaded by verified platform admins."
+    },
+    "/materials/{materialId}": {
+      "schema": {
+        "$ref": "#/entities/UploadedMaterialDoc"
+      },
+      "description": "Standalone training materials and uploaded handouts managed by verified platform admins."
+    }
+  }
+}

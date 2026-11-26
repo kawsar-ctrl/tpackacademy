@@ -1,0 +1,8 @@
+{
+  "name": "Remix সবুজ একাডেমি — ইকো ট্রেনিং এলএমএস",
+  "description": "ট্রেনিং ম্যাটেরিয়ালস, ইন্টারঅ্যাক্টিভ ভিডিও লেসন, কুইজ এবং ডিজিটাল সার্টিফিকেট ডাউনলোড সুবিধাযুক্ত পরিবেশবান্ধব লার্নিং ম্যানেজমেন্ট সিস্টেম।",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
