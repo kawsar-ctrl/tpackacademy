@@ -5,9 +5,14 @@ import {
   ArrowRight,
   Award,
   BookOpen,
+  CheckCircle2,
   ClipboardCheck,
+  Crown,
   Leaf,
+  Lock,
+  LogIn,
   PlayCircle,
+  ShieldCheck,
   Trophy,
   X
 } from 'lucide-react';
@@ -19,31 +24,51 @@ import {
 } from './data/coursesData';
 import { evaluateAchievements } from './data/achievementsData';
 import {
+  AccessControlConfig,
+  AdminRoleRecord,
+  CertificationPathwayProgress,
+  Course,
   CourseCategory,
   CustomCourseRecord,
   DiscussionPost,
   DiscussionPostType,
   DiscussionReply,
   EvaluatedAchievement,
+  InteractiveLearningResult,
   LearnerProgress,
+  ModuleLayoutConfig,
   NavTab,
+  PathwayStepId,
+  PaymentMethodType,
+  PaymentRequestRecord,
+  PracticalAssignmentSubmission,
+  PreAssessmentResult,
   QuizResult,
   UploadedMaterialItem,
+  UserAccessRecord,
   VoiceReflectionMeta
 } from './types/lms';
 import {
+  adminUpdateUserAccess,
   auth,
   createInitialProgressDoc,
   createInitialUserAndProgress,
   db,
   deleteCloudCourse,
   deleteCloudMaterial,
+  ensureInitialUserAccess,
+  grantModuleManagerRole,
   handleFirestoreError,
-  isVerifiedAdminUser,
+  isSuperAdminUser,
   OperationType,
+  reviewPaymentRequestAndGrantPro,
+  revokeModuleManagerRole,
+  saveCloudAccessControl,
   saveCloudCourse,
   saveCloudMaterial,
+  saveCloudModuleLayout,
   signOutAccount,
+  submitPaymentRequest,
   updateCloudLearnerProgress,
   updateCloudUserProfile
 } from './firebase';
@@ -60,6 +85,7 @@ import { TeacherLeaderboard } from './components/TeacherLeaderboard';
 import { CertificateStudioView } from './components/CertificateStudioView';
 import { ProfileModal } from './components/ProfileModal';
 import { LoginPanelModal, InlineLoginPanel } from './components/LoginPanel';
+import { AccessUpgradeModal } from './components/AccessUpgradeModal';
 import { TrainingScheduleSection } from './components/TrainingScheduleSection';
 import { GlassTiltCard } from './components/GlassTiltCard';
 import { CourseCarouselSection } from './components/CourseCarouselSection';
@@ -71,11 +97,44 @@ import {
   hasLessonNoteContent,
   toBengaliDigits
 } from './utils/lmsHelpers';
+import {
+  computeEffectiveAccess,
+  DEFAULT_ACCESS_CONTROL,
+  sanitizeSafeMediaUrl
+} from './utils/accessHelpers';
 import { deleteVoiceClipBlobs } from './utils/audioStorage';
+import { EMPTY_PATHWAY_PROGRESS } from './utils/pathwayHelpers';
 
 const STORAGE_KEY = 'tpack-academy-lms-v1';
+const PATHWAY_STORAGE_KEY = 'tpack-certification-pathway-v1';
 const CUSTOM_COURSES_STORAGE_KEY = 'tpack-custom-courses-v1';
+const MODULE_LAYOUT_STORAGE_KEY = 'tpack-module-layout-v1';
 const UPLOADED_MATERIALS_STORAGE_KEY = 'tpack-uploaded-materials-v1';
+
+function loadPathwayProgress(): CertificationPathwayProgress {
+  try {
+    const raw = window.localStorage.getItem(PATHWAY_STORAGE_KEY);
+    if (!raw) return EMPTY_PATHWAY_PROGRESS;
+    const parsed = JSON.parse(raw) as Partial<CertificationPathwayProgress>;
+    return {
+      preAssessments:
+        parsed.preAssessments && typeof parsed.preAssessments === 'object'
+          ? parsed.preAssessments
+          : {},
+      interactiveResults:
+        parsed.interactiveResults &&
+        typeof parsed.interactiveResults === 'object'
+          ? parsed.interactiveResults
+          : {},
+      assignments:
+        parsed.assignments && typeof parsed.assignments === 'object'
+          ? parsed.assignments
+          : {}
+    };
+  } catch {
+    return EMPTY_PATHWAY_PROGRESS;
+  }
+}
 
 function loadCustomCourses(): CustomCourseRecord[] {
   try {
@@ -85,6 +144,26 @@ function loadCustomCourses(): CustomCourseRecord[] {
     return Array.isArray(parsed) ? (parsed as CustomCourseRecord[]) : [];
   } catch {
     return [];
+  }
+}
+
+function loadModuleLayout(): ModuleLayoutConfig {
+  try {
+    const raw = window.localStorage.getItem(MODULE_LAYOUT_STORAGE_KEY);
+    if (!raw) return { orderedIds: [], hiddenCourseIds: [] };
+    const parsed = JSON.parse(raw) as Partial<ModuleLayoutConfig>;
+    return {
+      orderedIds: Array.isArray(parsed.orderedIds)
+        ? parsed.orderedIds.filter((id): id is string => typeof id === 'string')
+        : [],
+      hiddenCourseIds: Array.isArray(parsed.hiddenCourseIds)
+        ? parsed.hiddenCourseIds.filter(
+            (id): id is string => typeof id === 'string'
+          )
+        : []
+    };
+  } catch {
+    return { orderedIds: [], hiddenCourseIds: [] };
   }
 }
 
@@ -107,6 +186,14 @@ function parseCloudCourseDoc(
     data.category === 'pedagogy-eval' || data.category === 'research-leadership'
       ? data.category
       : 'tpack-tech';
+  const rawPathway =
+    data.pathwayConfig && typeof data.pathwayConfig === 'object'
+      ? (data.pathwayConfig as CustomCourseRecord['pathwayConfig'])
+      : undefined;
+  const orderIndex =
+    typeof data.orderIndex === 'number' && Number.isFinite(data.orderIndex)
+      ? data.orderIndex
+      : undefined;
   return {
     id: typeof data.id === 'string' && data.id ? data.id : docId,
     title: typeof data.title === 'string' ? data.title : 'কোর্স',
@@ -140,6 +227,8 @@ function parseCloudCourseDoc(
     quiz: Array.isArray(data.quiz)
       ? (data.quiz as CustomCourseRecord['quiz'])
       : [],
+    ...(rawPathway ? { pathwayConfig: rawPathway } : {}),
+    ...(orderIndex !== undefined ? { orderIndex } : {}),
     published: Boolean(data.published),
     createdByUid:
       typeof data.createdByUid === 'string' ? data.createdByUid : undefined,
@@ -206,9 +295,108 @@ function parseCloudMaterialDoc(
       typeof data.attachmentMimeType === 'string'
         ? data.attachmentMimeType
         : 'text/plain',
+    videoSourceType:
+      data.videoSourceType === 'link' || data.videoSourceType === 'upload'
+        ? data.videoSourceType
+        : 'none',
+    videoUrl:
+      typeof data.videoUrl === 'string' ? sanitizeSafeMediaUrl(data.videoUrl) : '',
+    videoFileName:
+      typeof data.videoFileName === 'string' ? data.videoFileName : '',
+    videoFileSizeLabel:
+      typeof data.videoFileSizeLabel === 'string' ? data.videoFileSizeLabel : '',
+    videoMimeType:
+      typeof data.videoMimeType === 'string' ? data.videoMimeType : '',
     published: Boolean(data.published),
     createdByUid:
       typeof data.createdByUid === 'string' ? data.createdByUid : undefined
+  };
+}
+
+function extractTimestampMs(val: unknown, fallbackMs = 0): number {
+  if (typeof val === 'number' && Number.isFinite(val)) return val;
+  if (
+    val &&
+    typeof val === 'object' &&
+    'toMillis' in val &&
+    typeof (val as { toMillis: () => number }).toMillis === 'function'
+  ) {
+    return (val as { toMillis: () => number }).toMillis();
+  }
+  return fallbackMs;
+}
+
+function parseCloudUserAccessDoc(
+  docId: string,
+  data: Record<string, unknown>
+): UserAccessRecord {
+  const tier =
+    data.planTier === 'annual_pro' || data.planTier === 'suspended'
+      ? data.planTier
+      : 'free_trial';
+  return {
+    uid: typeof data.uid === 'string' && data.uid ? data.uid : docId,
+    email: typeof data.email === 'string' ? data.email : '',
+    displayName:
+      typeof data.displayName === 'string' ? data.displayName : 'সম্মানিত শিক্ষক',
+    planTier: tier,
+    trialStartedAtMs:
+      typeof data.trialStartedAtMs === 'number' ? data.trialStartedAtMs : Date.now(),
+    trialEndsAtMs:
+      typeof data.trialEndsAtMs === 'number' ? data.trialEndsAtMs : Date.now(),
+    proActivatedAtMs:
+      typeof data.proActivatedAtMs === 'number' ? data.proActivatedAtMs : 0,
+    proExpiresAtMs:
+      typeof data.proExpiresAtMs === 'number' ? data.proExpiresAtMs : 0,
+    allowFullOverride: Boolean(data.allowFullOverride),
+    customNote: typeof data.customNote === 'string' ? data.customNote : '',
+    updatedAtMs: extractTimestampMs(data.updatedAt ?? data.updatedAtMs, Date.now())
+  };
+}
+
+function parseCloudPaymentRequestDoc(
+  docId: string,
+  data: Record<string, unknown>
+): PaymentRequestRecord {
+  const rawMethod =
+    typeof data.method === 'string'
+      ? data.method
+      : typeof data.paymentMethod === 'string'
+        ? data.paymentMethod
+        : 'bKash';
+  const method: PaymentMethodType =
+    rawMethod === 'Nagad' || rawMethod === 'nagad'
+      ? 'Nagad'
+      : rawMethod === 'Rocket' || rawMethod === 'rocket'
+        ? 'Rocket'
+        : rawMethod === 'Bank' || rawMethod === 'bank'
+          ? 'Bank'
+          : 'bKash';
+  const status =
+    data.status === 'approved' || data.status === 'rejected'
+      ? data.status
+      : 'pending';
+  return {
+    id: typeof data.id === 'string' && data.id ? data.id : docId,
+    userId: typeof data.userId === 'string' ? data.userId : '',
+    userEmail: typeof data.userEmail === 'string' ? data.userEmail : '',
+    userName: typeof data.userName === 'string' ? data.userName : 'শিক্ষক',
+    method,
+    senderPhone:
+      typeof data.senderPhone === 'string'
+        ? data.senderPhone
+        : typeof data.senderNumber === 'string'
+          ? data.senderNumber
+          : '',
+    transactionId: typeof data.transactionId === 'string' ? data.transactionId : '',
+    amountBdt: typeof data.amountBdt === 'number' ? data.amountBdt : 1000,
+    note: typeof data.note === 'string' ? data.note : '',
+    status,
+    reviewedByUid:
+      typeof data.reviewedByUid === 'string' ? data.reviewedByUid : '',
+    reviewNote: typeof data.reviewNote === 'string' ? data.reviewNote : '',
+    createdAtMs: extractTimestampMs(data.createdAt ?? data.createdAtMs, Date.now()),
+    updatedAtMs: extractTimestampMs(data.updatedAt ?? data.updatedAtMs, Date.now())
   };
 }
 
@@ -324,24 +512,50 @@ export default function App() {
   const [activeLessonId, setActiveLessonId] = useState<string>(
     COURSES[0].lessons[0].id
   );
+  const [activePathwayStep, setActivePathwayStep] = useState<
+    PathwayStepId | undefined
+  >(undefined);
   const [categoryFilter, setCategoryFilter] = useState<CourseCategory>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [cloudError, setCloudError] = useState<Error | null>(null);
   const [progress, setProgress] = useState<LearnerProgress>(loadProgress);
+  const [pathwayProgress, setPathwayProgress] =
+    useState<CertificationPathwayProgress>(loadPathwayProgress);
   const [customCourses, setCustomCourses] =
     useState<CustomCourseRecord[]>(loadCustomCourses);
+  const [moduleLayout, setModuleLayout] =
+    useState<ModuleLayoutConfig>(loadModuleLayout);
   const [uploadedMaterials, setUploadedMaterials] = useState<
     UploadedMaterialItem[]
   >(loadUploadedMaterials);
+  const [accessConfig, setAccessConfig] = useState<AccessControlConfig>(
+    DEFAULT_ACCESS_CONTROL
+  );
+  const [userAccess, setUserAccess] = useState<UserAccessRecord | null>(null);
+  const [isDelegatedModuleManager, setIsDelegatedModuleManager] =
+    useState(false);
+  const [userPaymentRequests, setUserPaymentRequests] = useState<
+    PaymentRequestRecord[]
+  >([]);
+  const [allUserAccessList, setAllUserAccessList] = useState<
+    UserAccessRecord[]
+  >([]);
+  const [allPaymentRequests, setAllPaymentRequests] = useState<
+    PaymentRequestRecord[]
+  >([]);
+  const [allAdminRoles, setAllAdminRoles] = useState<AdminRoleRecord[]>([]);
   const [unlockedToast, setUnlockedToast] =
     useState<EvaluatedAchievement | null>(null);
   const prevUnlockedRef = useRef<Set<string> | null>(null);
   const progressRef = useRef<LearnerProgress>(progress);
+  const accessConfigRef = useRef<AccessControlConfig>(accessConfig);
   const cloudReadyUidRef = useRef<string | null>(null);
+  const cloudCourseIdsRef = useRef<Set<string>>(new Set());
   const lastSyncedProfileJsonRef = useRef<string>('');
   const lastSyncedProgressJsonRef = useRef<string>('');
 
@@ -353,19 +567,96 @@ export default function App() {
     progressRef.current = progress;
   }, [progress]);
 
-  const isAdmin = useMemo(() => isVerifiedAdminUser(authUser), [authUser]);
+  useEffect(() => {
+    accessConfigRef.current = accessConfig;
+  }, [accessConfig]);
 
-  const allCourses = useMemo(
-    () => [
-      ...COURSES,
-      ...customCourses.filter((c) => c.published || isAdmin)
-    ],
-    [customCourses, isAdmin]
+  const isSuperAdmin = useMemo(() => isSuperAdminUser(authUser), [authUser]);
+  const canManageModules = isSuperAdmin || isDelegatedModuleManager;
+
+  const effectiveAccess = useMemo(
+    () =>
+      computeEffectiveAccess({
+        authUser,
+        isSuperAdmin,
+        isDelegatedModuleManager,
+        userAccess,
+        accessConfig
+      }),
+    [authUser, isSuperAdmin, isDelegatedModuleManager, userAccess, accessConfig]
   );
 
+  const builtInIds = useMemo(
+    () => new Set(COURSES.map((c) => c.id)),
+    []
+  );
+
+  const overrideIds = useMemo(
+    () =>
+      new Set(
+        customCourses.filter((c) => builtInIds.has(c.id)).map((c) => c.id)
+      ),
+    [customCourses, builtInIds]
+  );
+
+  const allManagedCourses = useMemo<Course[]>(() => {
+    const customMap = new Map<string, CustomCourseRecord>();
+    customCourses.forEach((c) => customMap.set(c.id, c));
+
+    const mergedBuiltIns: Course[] = COURSES.map((base) => {
+      const override = customMap.get(base.id);
+      return override ? { ...base, ...override } : base;
+    });
+
+    const pureCustom: Course[] = customCourses
+      .filter((c) => !builtInIds.has(c.id))
+      .sort((a, b) => (a.orderIndex ?? 9999) - (b.orderIndex ?? 9999));
+
+    const combined = [...mergedBuiltIns, ...pureCustom];
+    if (moduleLayout.orderedIds.length === 0) {
+      return combined;
+    }
+
+    const orderRank = new Map<string, number>();
+    moduleLayout.orderedIds.forEach((id, idx) => orderRank.set(id, idx));
+
+    return [...combined].sort((a, b) => {
+      const ra = orderRank.get(a.id);
+      const rb = orderRank.get(b.id);
+      if (ra !== undefined && rb !== undefined) return ra - rb;
+      if (ra !== undefined) return -1;
+      if (rb !== undefined) return 1;
+      return 0;
+    });
+  }, [customCourses, builtInIds, moduleLayout.orderedIds]);
+
+  const allCourses = useMemo(() => {
+    const hiddenSet = new Set(moduleLayout.hiddenCourseIds);
+    const customMap = new Map<string, CustomCourseRecord>();
+    customCourses.forEach((c) => customMap.set(c.id, c));
+
+    return allManagedCourses.filter((course) => {
+      if (hiddenSet.has(course.id)) return false;
+      const customRec = customMap.get(course.id);
+      if (customRec && !customRec.published && !canManageModules) return false;
+      return true;
+    });
+  }, [allManagedCourses, moduleLayout.hiddenCourseIds, customCourses, canManageModules]);
+
+  const unlockedCourseIds = useMemo(() => {
+    if (!Number.isFinite(effectiveAccess.allowedModuleCount)) {
+      return undefined;
+    }
+    return new Set(
+      allCourses
+        .slice(0, Math.max(0, effectiveAccess.allowedModuleCount))
+        .map((c) => c.id)
+    );
+  }, [allCourses, effectiveAccess.allowedModuleCount]);
+
   const visibleUploadedMaterials = useMemo(
-    () => uploadedMaterials.filter((m) => m.published || isAdmin),
-    [uploadedMaterials, isAdmin]
+    () => uploadedMaterials.filter((m) => m.published || canManageModules),
+    [uploadedMaterials, canManageModules]
   );
 
   const evaluatedAchievements = useMemo(
@@ -384,6 +675,17 @@ export default function App() {
   useEffect(() => {
     try {
       window.localStorage.setItem(
+        PATHWAY_STORAGE_KEY,
+        JSON.stringify(pathwayProgress)
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [pathwayProgress]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
         CUSTOM_COURSES_STORAGE_KEY,
         JSON.stringify(customCourses)
       );
@@ -391,6 +693,17 @@ export default function App() {
       // Ignore storage quota errors
     }
   }, [customCourses]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        MODULE_LAYOUT_STORAGE_KEY,
+        JSON.stringify(moduleLayout)
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [moduleLayout]);
 
   useEffect(() => {
     try {
@@ -417,13 +730,13 @@ export default function App() {
     if (authLoading) return;
 
     let cancelled = false;
-    const adminView = isVerifiedAdminUser(authUser);
+    const superAdminListView = isSuperAdminUser(authUser);
 
-    const coursesQuery = adminView
+    const coursesQuery = superAdminListView
       ? collection(db, 'courses')
       : query(collection(db, 'courses'), where('published', '==', true));
 
-    const materialsQuery = adminView
+    const materialsQuery = superAdminListView
       ? collection(db, 'materials')
       : query(collection(db, 'materials'), where('published', '==', true));
 
@@ -435,6 +748,7 @@ export default function App() {
           parseCloudCourseDoc(d.id, d.data() as Record<string, unknown>)
         );
         const cloudIds = new Set(cloudCourses.map((c) => c.id));
+        cloudCourseIdsRef.current = cloudIds;
         setCustomCourses((prev) => [
           ...cloudCourses,
           ...prev.filter((c) => !c.createdByUid && !cloudIds.has(c.id))
@@ -475,12 +789,282 @@ export default function App() {
       }
     );
 
+    const unsubLayout = onSnapshot(
+      doc(db, 'siteConfig', 'moduleLayout'),
+      (snap) => {
+        if (cancelled || !snap.exists()) return;
+        const data = snap.data();
+        setModuleLayout({
+          orderedIds: Array.isArray(data.orderedIds)
+            ? data.orderedIds.filter((id): id is string => typeof id === 'string')
+            : [],
+          hiddenCourseIds: Array.isArray(data.hiddenCourseIds)
+            ? data.hiddenCourseIds.filter(
+                (id): id is string => typeof id === 'string'
+              )
+            : []
+        });
+      },
+      (error) => {
+        try {
+          handleFirestoreError(
+            error,
+            OperationType.GET,
+            'siteConfig/moduleLayout'
+          );
+        } catch (err) {
+          if (!cancelled) {
+            setCloudError(err instanceof Error ? err : new Error(String(err)));
+          }
+        }
+      }
+    );
+
+    const unsubAccessConfig = onSnapshot(
+      doc(db, 'siteConfig', 'accessControl'),
+      (snap) => {
+        if (cancelled || !snap.exists()) return;
+        const data = snap.data();
+        setAccessConfig({
+          freeTrialDays:
+            typeof data.freeTrialDays === 'number'
+              ? data.freeTrialDays
+              : DEFAULT_ACCESS_CONTROL.freeTrialDays,
+          freeTrialMaxModules:
+            typeof data.freeTrialMaxModules === 'number'
+              ? data.freeTrialMaxModules
+              : DEFAULT_ACCESS_CONTROL.freeTrialMaxModules,
+          freeTrialAllowVideos:
+            typeof data.freeTrialAllowVideos === 'boolean'
+              ? data.freeTrialAllowVideos
+              : DEFAULT_ACCESS_CONTROL.freeTrialAllowVideos,
+          freeTrialAllowMaterialsDownload:
+            typeof data.freeTrialAllowMaterialsDownload === 'boolean'
+              ? data.freeTrialAllowMaterialsDownload
+              : DEFAULT_ACCESS_CONTROL.freeTrialAllowMaterialsDownload,
+          freeTrialAllowQuiz:
+            typeof data.freeTrialAllowQuiz === 'boolean'
+              ? data.freeTrialAllowQuiz
+              : DEFAULT_ACCESS_CONTROL.freeTrialAllowQuiz,
+          freeTrialAllowCertificate:
+            typeof data.freeTrialAllowCertificate === 'boolean'
+              ? data.freeTrialAllowCertificate
+              : DEFAULT_ACCESS_CONTROL.freeTrialAllowCertificate,
+          annualPriceBdt:
+            typeof data.annualPriceBdt === 'number'
+              ? data.annualPriceBdt
+              : DEFAULT_ACCESS_CONTROL.annualPriceBdt,
+          annualDurationDays:
+            typeof data.annualDurationDays === 'number'
+              ? data.annualDurationDays
+              : DEFAULT_ACCESS_CONTROL.annualDurationDays,
+          paymentInstructions:
+            typeof data.paymentInstructions === 'string'
+              ? data.paymentInstructions
+              : DEFAULT_ACCESS_CONTROL.paymentInstructions,
+          maintenanceMode: Boolean(data.maintenanceMode)
+        });
+      },
+      (error) => {
+        try {
+          handleFirestoreError(
+            error,
+            OperationType.GET,
+            'siteConfig/accessControl'
+          );
+        } catch (err) {
+          if (!cancelled) {
+            setCloudError(err instanceof Error ? err : new Error(String(err)));
+          }
+        }
+      }
+    );
+
     return () => {
       cancelled = true;
       unsubCourses();
       unsubMaterials();
+      unsubLayout();
+      unsubAccessConfig();
     };
   }, [authUser, authLoading]);
+
+  // Subscribe to per-user access record, module manager role, payment requests, and Super Admin queues
+  useEffect(() => {
+    if (!authUser || !authUser.emailVerified) {
+      setUserAccess(null);
+      setIsDelegatedModuleManager(false);
+      setUserPaymentRequests([]);
+      setAllUserAccessList([]);
+      setAllPaymentRequests([]);
+      setAllAdminRoles([]);
+      return;
+    }
+
+    let cancelled = false;
+    let bootstrappingAccess = false;
+    const uid = authUser.uid;
+    const superAdminView = isSuperAdminUser(authUser);
+
+    const unsubUserAccess = onSnapshot(
+      doc(db, 'userAccess', uid),
+      (snap) => {
+        if (cancelled) return;
+        if (!snap.exists()) {
+          if (!bootstrappingAccess) {
+            bootstrappingAccess = true;
+            void ensureInitialUserAccess(
+              authUser,
+              accessConfigRef.current
+            ).catch((err) => {
+              if (!cancelled) {
+                setCloudError(err instanceof Error ? err : new Error(String(err)));
+              }
+            });
+          }
+          return;
+        }
+        setUserAccess(
+          parseCloudUserAccessDoc(snap.id, snap.data() as Record<string, unknown>)
+        );
+      },
+      (error) => {
+        try {
+          handleFirestoreError(error, OperationType.GET, `userAccess/${uid}`);
+        } catch (err) {
+          if (!cancelled) {
+            setCloudError(err instanceof Error ? err : new Error(String(err)));
+          }
+        }
+      }
+    );
+
+    const unsubAdminRole = onSnapshot(
+      doc(db, 'admins', uid),
+      (snap) => {
+        if (cancelled) return;
+        setIsDelegatedModuleManager(snap.exists());
+      },
+      () => {
+        if (!cancelled) {
+          setIsDelegatedModuleManager(false);
+        }
+      }
+    );
+
+    const unsubUserPayments = onSnapshot(
+      query(collection(db, 'paymentRequests'), where('userId', '==', uid)),
+      (snapshot) => {
+        if (cancelled) return;
+        const rows = snapshot.docs
+          .map((d) =>
+            parseCloudPaymentRequestDoc(d.id, d.data() as Record<string, unknown>)
+          )
+          .sort((a, b) => b.createdAtMs - a.createdAtMs);
+        setUserPaymentRequests(rows);
+      },
+      (error) => {
+        try {
+          handleFirestoreError(error, OperationType.LIST, 'paymentRequests');
+        } catch (err) {
+          if (!cancelled) {
+            setCloudError(err instanceof Error ? err : new Error(String(err)));
+          }
+        }
+      }
+    );
+
+    let unsubAllUsers: (() => void) | null = null;
+    let unsubAllPayments: (() => void) | null = null;
+    let unsubAllAdmins: (() => void) | null = null;
+
+    if (superAdminView) {
+      unsubAllUsers = onSnapshot(
+        collection(db, 'userAccess'),
+        (snapshot) => {
+          if (cancelled) return;
+          setAllUserAccessList(
+            snapshot.docs.map((d) =>
+              parseCloudUserAccessDoc(d.id, d.data() as Record<string, unknown>)
+            )
+          );
+        },
+        (error) => {
+          try {
+            handleFirestoreError(error, OperationType.LIST, 'userAccess');
+          } catch (err) {
+            if (!cancelled) {
+              setCloudError(err instanceof Error ? err : new Error(String(err)));
+            }
+          }
+        }
+      );
+
+      unsubAllPayments = onSnapshot(
+        collection(db, 'paymentRequests'),
+        (snapshot) => {
+          if (cancelled) return;
+          const rows = snapshot.docs
+            .map((d) =>
+              parseCloudPaymentRequestDoc(d.id, d.data() as Record<string, unknown>)
+            )
+            .sort((a, b) => b.createdAtMs - a.createdAtMs);
+          setAllPaymentRequests(rows);
+        },
+        (error) => {
+          try {
+            handleFirestoreError(error, OperationType.LIST, 'paymentRequests');
+          } catch (err) {
+            if (!cancelled) {
+              setCloudError(err instanceof Error ? err : new Error(String(err)));
+            }
+          }
+        }
+      );
+
+      unsubAllAdmins = onSnapshot(
+        collection(db, 'admins'),
+        (snapshot) => {
+          if (cancelled) return;
+          setAllAdminRoles(
+            snapshot.docs.map((d) => {
+              const data = d.data() as Record<string, unknown>;
+              return {
+                uid: typeof data.uid === 'string' ? data.uid : d.id,
+                email: typeof data.email === 'string' ? data.email : '',
+                displayName:
+                  typeof data.displayName === 'string' ? data.displayName : '',
+                role: 'module_manager' as const,
+                grantedByUid:
+                  typeof data.grantedByUid === 'string'
+                    ? data.grantedByUid
+                    : ''
+              };
+            })
+          );
+        },
+        (error) => {
+          try {
+            handleFirestoreError(error, OperationType.LIST, 'admins');
+          } catch (err) {
+            if (!cancelled) {
+              setCloudError(err instanceof Error ? err : new Error(String(err)));
+            }
+          }
+        }
+      );
+    }
+
+    return () => {
+      cancelled = true;
+      unsubUserAccess();
+      unsubAdminRole();
+      unsubUserPayments();
+      if (unsubAllUsers) unsubAllUsers();
+      if (unsubAllPayments) unsubAllPayments();
+      if (unsubAllAdmins) unsubAllAdmins();
+    };
+  }, [authUser]);
 
   // Subscribe to Firestore user profile and progress when signed in
   useEffect(() => {
@@ -804,12 +1388,82 @@ export default function App() {
     (a) => a.status.unlocked
   ).length;
 
-  const handleOpenCourse = (courseId: string, lessonId?: string) => {
+  const navigateWithGate = useCallback(
+    (tab: NavTab) => {
+      if (tab !== 'courses' && !effectiveAccess.isSignedIn) {
+        setLoginOpen(true);
+        return;
+      }
+      if (tab === 'admin' && !effectiveAccess.canManageModules) {
+        setActiveTab('courses');
+        return;
+      }
+      if (
+        tab !== 'courses' &&
+        tab !== 'admin' &&
+        effectiveAccess.isSignedIn &&
+        !effectiveAccess.canAccessFeatures
+      ) {
+        setUpgradeModalOpen(true);
+        return;
+      }
+      setActiveTab(tab);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    [effectiveAccess]
+  );
+
+  const handleOpenCourse = (
+    courseId: string,
+    lessonId?: string,
+    pathwayStep?: PathwayStepId
+  ) => {
+    if (!effectiveAccess.isSignedIn) {
+      setLoginOpen(true);
+      return;
+    }
+    if (!effectiveAccess.canAccessFeatures) {
+      setUpgradeModalOpen(true);
+      return;
+    }
+    if (unlockedCourseIds && !unlockedCourseIds.has(courseId)) {
+      setUpgradeModalOpen(true);
+      return;
+    }
     const targetCourse =
       allCourses.find((c) => c.id === courseId) ?? allCourses[0] ?? COURSES[0];
     setActiveCourseId(targetCourse.id);
     setActiveLessonId(lessonId ?? targetCourse.lessons[0]?.id ?? '');
+    setActivePathwayStep(
+      pathwayStep ?? (lessonId ? 'video-lessons' : undefined)
+    );
     setActiveTab('classroom');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleOpenQuizOrCertificate = (courseId: string, passed: boolean) => {
+    if (!effectiveAccess.isSignedIn) {
+      setLoginOpen(true);
+      return;
+    }
+    if (!effectiveAccess.canAccessFeatures) {
+      setUpgradeModalOpen(true);
+      return;
+    }
+    if (unlockedCourseIds && !unlockedCourseIds.has(courseId)) {
+      setUpgradeModalOpen(true);
+      return;
+    }
+    if (passed && !effectiveAccess.canGetCertificate) {
+      setUpgradeModalOpen(true);
+      return;
+    }
+    if (!passed && !effectiveAccess.canTakeQuiz) {
+      setUpgradeModalOpen(true);
+      return;
+    }
+    setActiveCourseId(courseId);
+    setActiveTab(passed ? 'certificate' : 'quiz');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -840,6 +1494,61 @@ export default function App() {
       }
     }));
   }, []);
+
+  const handleSavePreAssessment = useCallback(
+    (result: PreAssessmentResult) => {
+      setPathwayProgress((prev) => ({
+        ...prev,
+        preAssessments: {
+          ...prev.preAssessments,
+          [result.courseId]: result
+        }
+      }));
+      handleLogPracticeMinutes(3);
+    },
+    [handleLogPracticeMinutes]
+  );
+
+  const handleUpdateInteractive = useCallback(
+    (result: InteractiveLearningResult) => {
+      const previous = pathwayProgress.interactiveResults[result.courseId];
+      const wasDone = Boolean(
+        previous &&
+          previous.quizChecked &&
+          previous.dragDropSolved &&
+          previous.scenarioSolved
+      );
+      const nowDone =
+        result.quizChecked && result.dragDropSolved && result.scenarioSolved;
+
+      setPathwayProgress((prev) => ({
+        ...prev,
+        interactiveResults: {
+          ...prev.interactiveResults,
+          [result.courseId]: result
+        }
+      }));
+
+      if (!wasDone && nowDone) {
+        handleLogPracticeMinutes(4);
+      }
+    },
+    [pathwayProgress.interactiveResults, handleLogPracticeMinutes]
+  );
+
+  const handleSubmitAssignment = useCallback(
+    (submission: PracticalAssignmentSubmission) => {
+      setPathwayProgress((prev) => ({
+        ...prev,
+        assignments: {
+          ...prev.assignments,
+          [submission.courseId]: submission
+        }
+      }));
+      handleLogPracticeMinutes(10);
+    },
+    [handleLogPracticeMinutes]
+  );
 
   const handleToggleLessonComplete = (lessonId: string) => {
     const todayKey = getLocalDateKey();
@@ -1097,6 +1806,7 @@ export default function App() {
   const handleResetProgress = () => {
     prevUnlockedRef.current = new Set();
     setUnlockedToast(null);
+    setPathwayProgress(EMPTY_PATHWAY_PROGRESS);
     setProgress((prev) => ({
       learnerName: prev.learnerName,
       designation: prev.designation,
@@ -1120,19 +1830,22 @@ export default function App() {
     setLoginOpen(false);
   }, []);
 
-  const handleSaveCourse = useCallback(
-    async (course: CustomCourseRecord, isNew: boolean) => {
-      if (!isVerifiedAdminUser(authUser) || !authUser) {
-        throw new Error('Admin login required to save courses.');
-      }
-
+  const handleSaveModule = useCallback(
+    async (course: CustomCourseRecord, _isBuiltIn: boolean) => {
+      const cloudManager = canManageModules && Boolean(authUser);
       const normalized: CustomCourseRecord = {
         ...course,
         isCustom: true,
-        createdByUid: course.createdByUid ?? authUser.uid
+        ...(cloudManager && authUser
+          ? { createdByUid: course.createdByUid ?? authUser.uid }
+          : {})
       };
 
-      await saveCloudCourse(authUser.uid, normalized, isNew);
+      if (cloudManager && authUser) {
+        const isNewInCloud = !cloudCourseIdsRef.current.has(normalized.id);
+        await saveCloudCourse(authUser.uid, normalized, isNewInCloud);
+        cloudCourseIdsRef.current.add(normalized.id);
+      }
 
       setCustomCourses((prev) => {
         const exists = prev.some((c) => c.id === normalized.id);
@@ -1142,36 +1855,146 @@ export default function App() {
         return [normalized, ...prev];
       });
     },
-    [authUser]
+    [authUser, canManageModules]
+  );
+
+  const handleRevertBuiltInOverride = useCallback(
+    async (courseId: string) => {
+      if (canManageModules && cloudCourseIdsRef.current.has(courseId)) {
+        await deleteCloudCourse(courseId);
+        cloudCourseIdsRef.current.delete(courseId);
+      }
+      setCustomCourses((prev) => prev.filter((c) => c.id !== courseId));
+    },
+    [canManageModules]
+  );
+
+  const syncModuleLayout = useCallback(
+    async (nextLayout: ModuleLayoutConfig) => {
+      setModuleLayout(nextLayout);
+      if (canManageModules && authUser) {
+        await saveCloudModuleLayout(authUser.uid, nextLayout);
+      }
+    },
+    [authUser, canManageModules]
   );
 
   const handleDeleteCourse = useCallback(
     async (courseId: string) => {
-      if (!isVerifiedAdminUser(authUser)) {
-        throw new Error('Admin login required to delete courses.');
+      if (canManageModules && cloudCourseIdsRef.current.has(courseId)) {
+        await deleteCloudCourse(courseId);
+        cloudCourseIdsRef.current.delete(courseId);
       }
-      await deleteCloudCourse(courseId);
       setCustomCourses((prev) => prev.filter((c) => c.id !== courseId));
+      const nextLayout: ModuleLayoutConfig = {
+        orderedIds: moduleLayout.orderedIds.filter((id) => id !== courseId),
+        hiddenCourseIds: moduleLayout.hiddenCourseIds.filter(
+          (id) => id !== courseId
+        )
+      };
+      await syncModuleLayout(nextLayout);
       if (activeCourseId === courseId) {
         setActiveCourseId(COURSES[0].id);
         setActiveLessonId(COURSES[0].lessons[0].id);
       }
     },
-    [authUser, activeCourseId]
+    [canManageModules, activeCourseId, moduleLayout, syncModuleLayout]
   );
+
+  const handleReorderModules = useCallback(
+    async (orderedIds: string[]) => {
+      await syncModuleLayout({
+        orderedIds,
+        hiddenCourseIds: moduleLayout.hiddenCourseIds
+      });
+    },
+    [moduleLayout.hiddenCourseIds, syncModuleLayout]
+  );
+
+  const handleToggleModuleVisibility = useCallback(
+    async (courseId: string) => {
+      const exists = moduleLayout.hiddenCourseIds.includes(courseId);
+      const nextHidden = exists
+        ? moduleLayout.hiddenCourseIds.filter((id) => id !== courseId)
+        : [...moduleLayout.hiddenCourseIds, courseId];
+      await syncModuleLayout({
+        orderedIds:
+          moduleLayout.orderedIds.length > 0
+            ? moduleLayout.orderedIds
+            : allManagedCourses.map((c) => c.id),
+        hiddenCourseIds: nextHidden
+      });
+    },
+    [moduleLayout, allManagedCourses, syncModuleLayout]
+  );
+
+  const handleBatchRenumberModules = useCallback(async () => {
+    const cloudManager = canManageModules && Boolean(authUser);
+    const customMap = new Map<string, CustomCourseRecord>();
+    customCourses.forEach((c) => customMap.set(c.id, c));
+
+    const updatedRecords: CustomCourseRecord[] = [];
+    for (let idx = 0; idx < allManagedCourses.length; idx += 1) {
+      const course = allManagedCourses[idx];
+      const bnNum = toBengaliDigits(String(idx + 1).padStart(2, '0'));
+      const strippedTitle = course.title
+        .replace(/^[০-৯0-9]{1,3}\s*[·.\-:–—]\s*/, '')
+        .trim();
+      const nextTitle = `${bnNum} · ${strippedTitle || course.title}`;
+      const existingRec = customMap.get(course.id);
+
+      if (course.title !== nextTitle || existingRec?.orderIndex !== idx) {
+        const record: CustomCourseRecord = {
+          ...course,
+          ...(existingRec ?? {}),
+          title: nextTitle,
+          orderIndex: idx,
+          published: existingRec ? existingRec.published : true,
+          isCustom: true,
+          ...(cloudManager && authUser
+            ? { createdByUid: existingRec?.createdByUid ?? authUser.uid }
+            : {})
+        };
+        updatedRecords.push(record);
+        if (cloudManager && authUser) {
+          const isNewInCloud = !cloudCourseIdsRef.current.has(record.id);
+          await saveCloudCourse(authUser.uid, record, isNewInCloud);
+          cloudCourseIdsRef.current.add(record.id);
+        }
+      }
+    }
+
+    if (updatedRecords.length > 0) {
+      const updatedMap = new Map(updatedRecords.map((r) => [r.id, r]));
+      setCustomCourses((prev) => {
+        const next = prev.map((c) => updatedMap.get(c.id) ?? c);
+        updatedRecords.forEach((rec) => {
+          if (!next.some((c) => c.id === rec.id)) {
+            next.push(rec);
+          }
+        });
+        return next;
+      });
+    }
+  }, [authUser, canManageModules, customCourses, allManagedCourses]);
+
+  const handleResetLayoutToDefault = useCallback(async () => {
+    await syncModuleLayout({ orderedIds: [], hiddenCourseIds: [] });
+  }, [syncModuleLayout]);
 
   const handleSaveMaterial = useCallback(
     async (material: UploadedMaterialItem, isNew: boolean) => {
-      if (!isVerifiedAdminUser(authUser) || !authUser) {
-        throw new Error('Admin login required to save materials.');
-      }
-
+      const cloudManager = canManageModules && Boolean(authUser);
       const normalized: UploadedMaterialItem = {
         ...material,
-        createdByUid: material.createdByUid ?? authUser.uid
+        ...(cloudManager && authUser
+          ? { createdByUid: material.createdByUid ?? authUser.uid }
+          : {})
       };
 
-      await saveCloudMaterial(authUser.uid, normalized, isNew);
+      if (cloudManager && authUser) {
+        await saveCloudMaterial(authUser.uid, normalized, isNew);
+      }
 
       setUploadedMaterials((prev) => {
         const exists = prev.some((m) => m.id === normalized.id);
@@ -1181,25 +2004,100 @@ export default function App() {
         return [normalized, ...prev];
       });
     },
-    [authUser]
+    [authUser, canManageModules]
   );
 
   const handleDeleteMaterial = useCallback(
     async (materialId: string) => {
-      if (!isVerifiedAdminUser(authUser)) {
-        throw new Error('Admin login required to delete materials.');
+      if (canManageModules) {
+        await deleteCloudMaterial(materialId);
       }
-      await deleteCloudMaterial(materialId);
       setUploadedMaterials((prev) => prev.filter((m) => m.id !== materialId));
+    },
+    [canManageModules]
+  );
+
+  const handleSaveAccessControl = useCallback(
+    async (nextConfig: AccessControlConfig) => {
+      if (!authUser || !isSuperAdmin) return;
+      await saveCloudAccessControl(authUser.uid, nextConfig);
+    },
+    [authUser, isSuperAdmin]
+  );
+
+  const handleSuperAdminUpdateUserAccess = useCallback(
+    async (
+      targetUserId: string,
+      patch: {
+        displayName?: string;
+        planTier: UserAccessRecord['planTier'];
+        trialStartedAtMs: number;
+        trialEndsAtMs: number;
+        proActivatedAtMs: number;
+        proExpiresAtMs: number;
+        allowFullOverride: boolean;
+        customNote: string;
+      }
+    ) => {
+      if (!isSuperAdmin) return;
+      await adminUpdateUserAccess(targetUserId, patch);
+    },
+    [isSuperAdmin]
+  );
+
+  const handleReviewPaymentRequest = useCallback(
+    async (
+      req: PaymentRequestRecord,
+      approve: boolean,
+      reviewNote: string,
+      existingUserAccess?: UserAccessRecord
+    ) => {
+      if (!authUser || !isSuperAdmin) return;
+      await reviewPaymentRequestAndGrantPro(
+        authUser.uid,
+        req,
+        approve,
+        accessConfig.annualDurationDays,
+        reviewNote,
+        existingUserAccess
+      );
+    },
+    [authUser, isSuperAdmin, accessConfig.annualDurationDays]
+  );
+
+  const handleToggleModuleManagerRole = useCallback(
+    async (userRec: UserAccessRecord, shouldBeManager: boolean) => {
+      if (!authUser || !isSuperAdmin) return;
+      if (shouldBeManager) {
+        await grantModuleManagerRole(authUser.uid, {
+          uid: userRec.uid,
+          email: userRec.email,
+          displayName: userRec.displayName
+        });
+      } else {
+        await revokeModuleManagerRole(userRec.uid);
+      }
+    },
+    [authUser, isSuperAdmin]
+  );
+
+  const handleSubmitPaymentRequest = useCallback(
+    async (payload: {
+      userName: string;
+      method: PaymentMethodType;
+      senderPhone: string;
+      transactionId: string;
+      amountBdt: number;
+      note: string;
+    }) => {
+      if (!authUser || !authUser.emailVerified) {
+        setLoginOpen(true);
+        return;
+      }
+      await submitPaymentRequest(authUser, payload);
     },
     [authUser]
   );
-
-  useEffect(() => {
-    if (!authLoading && !isAdmin && activeTab === 'admin') {
-      setActiveTab('courses');
-    }
-  }, [authLoading, isAdmin, activeTab]);
 
   return (
     <div id="top" className="relative min-h-screen flex flex-col text-[#132219]">
@@ -1214,16 +2112,111 @@ export default function App() {
         activeTab={activeTab}
         authUser={authUser}
         authLoading={authLoading}
-        isAdmin={isAdmin}
-        onNavigate={(tab) => {
-          setActiveTab(tab);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
+        canManageModules={canManageModules}
+        effectiveAccess={effectiveAccess}
+        onNavigate={navigateWithGate}
+        onOpenProfile={() => {
+          if (!effectiveAccess.isSignedIn) {
+            setLoginOpen(true);
+            return;
+          }
+          setProfileOpen(true);
         }}
-        onOpenProfile={() => setProfileOpen(true)}
         onOpenLogin={() => setLoginOpen(true)}
+        onOpenUpgrade={() => setUpgradeModalOpen(true)}
       />
 
       <main className="flex-1">
+        {activeTab !== 'courses' && !effectiveAccess.isSignedIn && (
+          <section className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+            <div className="glass-surface rounded-3xl p-8 sm:p-10 text-center space-y-5">
+              <div className="glass-3d-icon-well w-14 h-14 rounded-2xl flex items-center justify-center mx-auto text-[#15803D]">
+                <Lock className="w-7 h-7" />
+              </div>
+              <div className="space-y-2 max-w-lg mx-auto">
+                <div className="text-xs font-semibold text-[#15803D]">
+                  লগইন সুরক্ষিত অঞ্চল · TPACK Academy
+                </div>
+                <h1 className="text-2xl sm:text-3xl font-bold text-[#132219]">
+                  ফিচারগুলো ব্যবহার করতে প্রথমে Google দিয়ে লগইন করুন
+                </h1>
+                <p className="text-sm text-[#3F5247] leading-relaxed">
+                  লগইন না করলে কোনো প্রশিক্ষণ মডিউল, ভিডিও, উপকরণ, কুইজ বা সার্টিফিকেট এক্সেস করা যাবে না। সাইন ইন করলে সাথে সাথে{' '}
+                  <strong>{toBengaliDigits(accessConfig.freeTrialDays)} দিনের ফ্রি লিমিটেড এক্সেস</strong>{' '}
+                  চালু হবে এবং মাত্র ৳{toBengaliDigits(accessConfig.annualPriceBdt)} টাকায় ১ বছরের ফুল এক্সেস নিতে পারবেন।
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setLoginOpen(true)}
+                  className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold btn-3d-emerald rounded-xl min-h-[46px] cursor-pointer"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>Google দিয়ে লগইন করুন</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('courses')}
+                  className="px-4 py-3 text-sm font-semibold text-[#132219] btn-3d-glass rounded-xl min-h-[46px] cursor-pointer"
+                >
+                  মূল পাতায় ফিরুন
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activeTab !== 'courses' &&
+          effectiveAccess.isSignedIn &&
+          !effectiveAccess.canAccessFeatures &&
+          !(activeTab === 'admin' && effectiveAccess.canManageModules) && (
+            <section className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+              <div className="glass-surface rounded-3xl p-8 sm:p-10 text-center space-y-5">
+                <div className="glass-3d-icon-well w-14 h-14 rounded-2xl flex items-center justify-center mx-auto text-[#B45309]">
+                  <Crown className="w-7 h-7" />
+                </div>
+                <div className="space-y-2 max-w-lg mx-auto">
+                  <div className="text-xs font-semibold text-[#B45309]">
+                    {effectiveAccess.statusLabelBn}
+                  </div>
+                  <h1 className="text-2xl sm:text-3xl font-bold text-[#132219]">
+                    {effectiveAccess.status === 'maintenance'
+                      ? 'প্ল্যাটফর্মে সাময়িক রক্ষণাবেক্ষণ চলছে'
+                      : effectiveAccess.status === 'suspended'
+                        ? 'আপনার অ্যাকাউন্টের এক্সেস সাময়িকভাবে স্থগিত'
+                        : 'আপনার ৭ দিনের ফ্রি ট্রায়াল মেয়াদ শেষ হয়েছে'}
+                  </h1>
+                  <p className="text-sm text-[#3F5247] leading-relaxed">
+                    {effectiveAccess.statusDetailBn}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  {effectiveAccess.status !== 'maintenance' &&
+                    effectiveAccess.status !== 'suspended' && (
+                      <button
+                        type="button"
+                        onClick={() => setUpgradeModalOpen(true)}
+                        className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold btn-3d-emerald rounded-xl min-h-[46px] cursor-pointer"
+                      >
+                        <Crown className="w-4 h-4" />
+                        <span>
+                          ৳{toBengaliDigits(accessConfig.annualPriceBdt)} টাকায় ১ বছরের ফুল এক্সেস নিন
+                        </span>
+                      </button>
+                    )}
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('courses')}
+                    className="px-4 py-3 text-sm font-semibold text-[#132219] btn-3d-glass rounded-xl min-h-[46px] cursor-pointer"
+                  >
+                    মূল পাতায় ফিরুন
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
+
         {activeTab === 'courses' && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-12">
             {/* Hero Split Section */}
@@ -1242,23 +2235,58 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-4 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => handleOpenCourse(allCourses[0]?.id ?? COURSES[0].id)}
-                    className="inline-flex items-center gap-2 px-5 py-3 text-sm font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 min-h-[44px] cursor-pointer"
-                  >
-                    <span>প্রশিক্ষণ শুরু করুন</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
+                  {effectiveAccess.isSignedIn ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleOpenCourse(allCourses[0]?.id ?? COURSES[0].id)
+                        }
+                        className="inline-flex items-center gap-2 px-5 py-3 text-sm font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 min-h-[44px] cursor-pointer"
+                      >
+                        <span>প্রশিক্ষণ শুরু করুন</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('certificate')}
-                    className="inline-flex items-center gap-2 px-4 py-3 text-sm font-semibold text-[#132219] btn-3d-glass rounded-xl whitespace-nowrap shrink-0 min-h-[44px] cursor-pointer"
-                  >
-                    <Award className="w-4 h-4 text-[#15803D]" />
-                    <span>CPD সার্টিফিকেট</span>
-                  </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!effectiveAccess.canGetCertificate) {
+                            setUpgradeModalOpen(true);
+                            return;
+                          }
+                          navigateWithGate('certificate');
+                        }}
+                        className="inline-flex items-center gap-2 px-4 py-3 text-sm font-semibold text-[#132219] btn-3d-glass rounded-xl whitespace-nowrap shrink-0 min-h-[44px] cursor-pointer"
+                      >
+                        <Award className="w-4 h-4 text-[#15803D]" />
+                        <span>CPD সার্টিফিকেট</span>
+                      </button>
+
+                      {!effectiveAccess.isProActive &&
+                        !effectiveAccess.isSuperAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => setUpgradeModalOpen(true)}
+                            className="inline-flex items-center gap-2 px-4 py-3 text-sm font-semibold text-[#B45309] btn-3d-glass ring-1 ring-[#D97706]/35 rounded-xl whitespace-nowrap shrink-0 min-h-[44px] cursor-pointer"
+                          >
+                            <Crown className="w-4 h-4" />
+                            <span>
+                              ৳{toBengaliDigits(accessConfig.annualPriceBdt)}/বছর ফুল এক্সেস
+                            </span>
+                          </button>
+                        )}
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setLoginOpen(true)}
+                      className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 min-h-[46px] cursor-pointer"
+                    >
+                      <LogIn className="w-4 h-4" />
+                      <span>Google দিয়ে লগইন করে শুরু করুন</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1346,336 +2374,534 @@ export default function App() {
               authUser={authUser}
               authLoading={authLoading}
               learnerName={progress.learnerName}
+              freeTrialDays={accessConfig.freeTrialDays}
+              annualPriceBdt={accessConfig.annualPriceBdt}
               onOpenLoginModal={() => setLoginOpen(true)}
               onSignOut={handleSignOut}
             />
 
-            {/* Daily Pedagogy Tip tailored to courses currently being studied */}
-            <DailyPedagogyTip
-              courses={allCourses}
-              sessions={TRAINING_SESSIONS}
-              progress={progress}
-              onOpenCourse={(courseId, lessonId) =>
-                handleOpenCourse(courseId, lessonId)
-              }
-            />
-
-            {/* Learning Dashboard: Total Study Time & Weekly Activity Bar Chart */}
-            <LearningDashboard
-              courses={allCourses}
-              progress={progress}
-              onLogPracticeMinutes={handleLogPracticeMinutes}
-              onOpenCourse={(courseId, lessonId) =>
-                handleOpenCourse(courseId, lessonId)
-              }
-            />
-
-            {/* Teacher Leaderboard: Top Performers by Study Time & Completed Quiz Modules */}
-            <TeacherLeaderboard
-              courses={allCourses}
-              progress={progress}
-              onGoToQuiz={() => {
-                setActiveTab('quiz');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              onOpenClassroom={() => handleOpenCourse(activeCourse.id)}
-            />
-
-            {/* Course Catalog Section with Interactive 3D Carousel */}
-            <CourseCarouselSection
-              courses={filteredCourses}
-              categoryFilter={categoryFilter}
-              onCategoryChange={setCategoryFilter}
-              searchQuery={searchQuery}
-              onSearchChange={setSearchQuery}
-              completedLessonIds={progress.completedLessonIds}
-              quizResults={progress.quizResults}
-              onOpenCourse={(courseId) => handleOpenCourse(courseId)}
-              onOpenQuizOrCertificate={(courseId, passed) => {
-                setActiveCourseId(courseId);
-                setActiveTab(passed ? 'certificate' : 'quiz');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              onResetFilters={() => {
-                setCategoryFilter('all');
-                setSearchQuery('');
-              }}
-            />
-
-            {/* Smart Teacher Professional Development Framework (22 Modules · 4 Pillars · 3 Tiers) */}
-            <SmartPdFrameworkSection
-              courses={allCourses}
-              completedLessonIds={progress.completedLessonIds}
-              quizResults={progress.quizResults}
-              onOpenCourse={(courseId) => handleOpenCourse(courseId)}
-              onOpenQuizOrCertificate={(courseId, passed) => {
-                setActiveCourseId(courseId);
-                setActiveTab(passed ? 'certificate' : 'quiz');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-            />
-
-            {/* Learning Achievements Preview Band */}
-            <section className="space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-4 border-b border-white/75">
-                <div className="space-y-1">
-                  <div className="text-xs font-semibold text-[#15803D]">
-                    Learning Achievements · ডিজিটাল দক্ষতা ব্যাজ
+            {!effectiveAccess.isSignedIn ? (
+              <section
+                aria-label="লগইন গেট ও সাবস্ক্রিপশন পরিকল্পনা"
+                className="glass-surface rounded-3xl p-6 sm:p-8 space-y-6"
+              >
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-white/75">
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-semibold text-[#15803D] inline-flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>লগইন ছাড়া ফিচারসমূহ বন্ধ রয়েছে</span>
+                    </div>
+                    <h2 className="text-2xl font-bold text-[#132219]">
+                      প্রশিক্ষণ মডিউল, ভিডিও ও CPD সার্টিফিকেট চালু করতে সাইন ইন করুন
+                    </h2>
+                    <p className="text-sm text-[#3F5247] max-w-2xl">
+                      সকল ফিচার ব্যবহার করতে Google অ্যাকাউন্ট দিয়ে লগইন বাধ্যতামূলক। লগইন করার পর স্বয়ংক্রিয়ভাবে{' '}
+                      {toBengaliDigits(accessConfig.freeTrialDays)} দিনের ফ্রি লিমিটেড এক্সেস পাবেন।
+                    </p>
                   </div>
-                  <h2 className="text-2xl font-bold text-[#132219] tracking-tight">
-                    শিখন অর্জন ও সম্মাননা ব্যাজ ({toBengaliDigits(earnedBadgesCount)}/
-                    {toBengaliDigits(evaluatedAchievements.length)})
-                  </h2>
-                  <p className="text-sm text-[#3F5247]">
-                    কোর্স মডিউল সম্পন্ন করে এবং কুইজে উচ্চ নম্বর অর্জন করে আপনার পেশাগত ডিজিটাল ব্যাজ সংগ্রহ করুন।
-                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => setLoginOpen(true)}
+                    className="inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 min-h-[46px] cursor-pointer"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>এখনই লগইন করুন</span>
+                  </button>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('achievements');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-[#132219] btn-3d-glass rounded-xl whitespace-nowrap shrink-0 min-h-[42px] cursor-pointer"
-                >
-                  <Trophy className="w-4 h-4 text-[#B45309]" />
-                  <span>সব ব্যাজ ও অগ্রগতি দেখুন</span>
-                  <ArrowRight className="w-4 h-4 text-[#15803D]" />
-                </button>
-              </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  <div className="glass-card-3d rounded-2xl p-5 sm:p-6 space-y-3">
+                    <div className="text-xs font-semibold text-[#15803D]">
+                      প্ল্যান ০১ · স্বয়ংক্রিয় শুরু
+                    </div>
+                    <h3 className="text-xl font-bold text-[#132219]">
+                      {toBengaliDigits(accessConfig.freeTrialDays)} দিন ফ্রি লিমিটেড এক্সেস
+                    </h3>
+                    <div className="text-2xl font-bold font-mono text-[#132219]">
+                      ৳০{' '}
+                      <span className="text-xs font-normal text-[#3F5247]">
+                        / প্রথম {toBengaliDigits(accessConfig.freeTrialDays)} দিন
+                      </span>
+                    </div>
+                    <ul className="space-y-2 text-xs text-[#2C3E33] pt-1">
+                      <li className="flex items-start gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+                        <span>
+                          প্রথম {toBengaliDigits(accessConfig.freeTrialMaxModules)}টি পূর্ণাঙ্গ প্রশিক্ষণ মডিউল উন্মুক্ত
+                        </span>
+                      </li>
+                      <li className="flex items-start gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+                        <span>ইন্টারঅ্যাক্টিভ পাঠ ও নোটবুক ব্যবহারের সুবিধা</span>
+                      </li>
+                    </ul>
+                  </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                {[
-                  'tech-savvy-educator',
-                  'pedagogy-pro',
-                  'quiz-ace'
-                ]
-                  .map((id) => evaluatedAchievements.find((a) => a.id === id))
-                  .filter((a): a is EvaluatedAchievement => Boolean(a))
-                  .map((badge) => (
-                    <div
-                      key={badge.id}
-                      className={`glass-card-3d rounded-2xl p-5 flex flex-col justify-between gap-4 ${
-                        badge.status.unlocked
-                          ? 'ring-1 ring-[#15803D]/30'
-                          : ''
-                      }`}
+                  <div className="glass-card-3d rounded-2xl p-5 sm:p-6 ring-1 ring-[#15803D]/35 space-y-3">
+                    <div className="text-xs font-semibold text-[#15803D] inline-flex items-center gap-1.5">
+                      <Crown className="w-3.5 h-3.5" />
+                      <span>প্ল্যান ০২ · বার্ষিক প্রো সদস্যপদ</span>
+                    </div>
+                    <h3 className="text-xl font-bold text-[#132219]">
+                      ১ বছরের পূর্ণাঙ্গ প্রো এক্সেস
+                    </h3>
+                    <div className="text-2xl font-bold font-mono text-[#15803D]">
+                      ৳{toBengaliDigits(accessConfig.annualPriceBdt)}{' '}
+                      <span className="text-xs font-normal text-[#3F5247]">
+                        / {toBengaliDigits(accessConfig.annualDurationDays)} দিন (১ বছর)
+                      </span>
+                    </div>
+                    <ul className="space-y-2 text-xs text-[#2C3E33] pt-1">
+                      <li className="flex items-start gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+                        <span>
+                          সব ({toBengaliDigits(allCourses.length)}টি+) মডিউল, ভিডিও ও ডাউনলোডযোগ্য উপকরণ আনলকড
+                        </span>
+                      </li>
+                      <li className="flex items-start gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+                        <span>সকল কুইজ, প্র্যাকটিক্যাল অ্যাসাইনমেন্ট ও অফিশিয়াল CPD সার্টিফিকেট</span>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </section>
+            ) : !effectiveAccess.canAccessFeatures ? (
+              <section
+                aria-label="এক্সেস সীমাবদ্ধ"
+                className="glass-surface rounded-3xl p-7 sm:p-9 flex flex-col md:flex-row items-center justify-between gap-6"
+              >
+                <div className="flex items-start gap-4">
+                  <div className="glass-3d-icon-well w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 text-[#B45309]">
+                    <Crown className="w-6 h-6" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-semibold text-[#B45309]">
+                      {effectiveAccess.statusLabelBn}
+                    </div>
+                    <h2 className="text-xl font-bold text-[#132219]">
+                      কোর্স ও প্রশিক্ষণ ফিচার পুনরায় চালু করতে প্রো এক্সেস সক্রিয় করুন
+                    </h2>
+                    <p className="text-sm text-[#3F5247]">
+                      {effectiveAccess.statusDetailBn}
+                    </p>
+                  </div>
+                </div>
+                {effectiveAccess.status !== 'maintenance' &&
+                  effectiveAccess.status !== 'suspended' && (
+                    <button
+                      type="button"
+                      onClick={() => setUpgradeModalOpen(true)}
+                      className="inline-flex items-center gap-2 px-5 py-3 text-sm font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 cursor-pointer"
                     >
-                      <div className="flex items-start gap-3.5">
-                        <AchievementBadgeEmblem
-                          iconKey={badge.iconKey}
-                          tier={badge.tier}
-                          unlocked={badge.status.unlocked}
-                          size="md"
-                        />
-                        <div className="min-w-0 space-y-1">
-                          <div className="text-xs text-[#3F5247] flex items-center gap-1.5">
-                            <span className="font-semibold text-[#15803D]">
-                              {badge.tierLabel}
-                            </span>
-                            <span aria-hidden="true">·</span>
-                            <span>
-                              {badge.status.unlocked ? 'অর্জিত' : 'লক করা'}
-                            </span>
-                          </div>
-                          <h3 className="text-base font-bold font-display text-[#132219] leading-snug">
-                            {badge.titleEn}
-                          </h3>
-                          <div className="text-xs font-semibold text-[#2C3E33]">
-                            {badge.titleBn}
-                          </div>
-                        </div>
+                      <Crown className="w-4 h-4" />
+                      <span>
+                        ৳{toBengaliDigits(accessConfig.annualPriceBdt)}/বছর আনলক করুন
+                      </span>
+                    </button>
+                  )}
+              </section>
+            ) : (
+              <>
+                {/* Signed-in Access Plan Banner */}
+                {!effectiveAccess.isSuperAdmin && (
+                  <section
+                    aria-label="সাবস্ক্রিপশন ও এক্সেস অবস্থা"
+                    className="glass-surface rounded-2xl px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="glass-3d-icon-well w-10 h-10 rounded-xl flex items-center justify-center shrink-0 text-[#15803D]">
+                        {effectiveAccess.isModuleManager ? (
+                          <ShieldCheck className="w-5 h-5" />
+                        ) : (
+                          <Crown className="w-5 h-5" />
+                        )}
                       </div>
-
-                      <div className="space-y-2 pt-2 border-t border-white/75">
-                        <div className="flex items-center justify-between text-xs text-[#3F5247]">
-                          <span>{badge.criteriaLabel}</span>
-                          <span className="font-mono tabular-nums font-semibold text-[#132219] shrink-0 ml-2">
-                            {toBengaliDigits(badge.status.percentage)}%
-                          </span>
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-[#132219]">
+                          {effectiveAccess.statusLabelBn}
                         </div>
-                        <div className="w-full h-2 glass-well rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-transform duration-300 origin-left ${
-                              badge.status.unlocked
-                                ? badge.tier === 'gold'
-                                  ? 'bg-[#B45309]'
-                                  : 'bg-gradient-to-r from-[#15803D] to-[#22C55E]'
-                                : 'bg-[#6A9E7D]'
-                            }`}
-                            style={{
-                              transform: `scaleX(${badge.status.percentage / 100})`
-                            }}
-                          />
+                        <div className="text-xs text-[#3F5247]">
+                          {effectiveAccess.statusDetailBn}
                         </div>
                       </div>
                     </div>
-                  ))}
-              </div>
-            </section>
 
-            <TrainingScheduleSection
-              sessions={TRAINING_SESSIONS}
-              registeredSessionIds={progress.registeredSessionIds}
-              onToggleRegister={handleToggleSessionRegister}
-              onOpenCourse={(courseId) => handleOpenCourse(courseId)}
-              onOpenFullCalendar={() => {
-                setActiveTab('calendar');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-            />
+                    {!effectiveAccess.isProActive && (
+                      <button
+                        type="button"
+                        onClick={() => setUpgradeModalOpen(true)}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <Crown className="w-3.5 h-3.5" />
+                        <span>
+                          ৳{toBengaliDigits(accessConfig.annualPriceBdt)} টাকায় ১ বছরের ফুল এক্সেস নিন
+                        </span>
+                      </button>
+                    )}
+                  </section>
+                )}
+
+                {/* Daily Pedagogy Tip tailored to courses currently being studied */}
+                <DailyPedagogyTip
+                  courses={allCourses}
+                  sessions={TRAINING_SESSIONS}
+                  progress={progress}
+                  onOpenCourse={(courseId, lessonId) =>
+                    handleOpenCourse(courseId, lessonId)
+                  }
+                />
+
+                {/* Learning Dashboard: Total Study Time & Weekly Activity Bar Chart */}
+                <LearningDashboard
+                  courses={allCourses}
+                  progress={progress}
+                  onLogPracticeMinutes={handleLogPracticeMinutes}
+                  onOpenCourse={(courseId, lessonId) =>
+                    handleOpenCourse(courseId, lessonId)
+                  }
+                />
+
+                {/* Teacher Leaderboard: Top Performers by Study Time & Completed Quiz Modules */}
+                <TeacherLeaderboard
+                  courses={allCourses}
+                  progress={progress}
+                  onGoToQuiz={() => navigateWithGate('quiz')}
+                  onOpenClassroom={() => handleOpenCourse(activeCourse.id)}
+                />
+
+                {/* Course Catalog Section with Interactive 3D Carousel */}
+                <CourseCarouselSection
+                  courses={filteredCourses}
+                  categoryFilter={categoryFilter}
+                  onCategoryChange={setCategoryFilter}
+                  searchQuery={searchQuery}
+                  onSearchChange={setSearchQuery}
+                  completedLessonIds={progress.completedLessonIds}
+                  quizResults={progress.quizResults}
+                  pathwayProgress={pathwayProgress}
+                  unlockedCourseIds={unlockedCourseIds}
+                  onOpenCourse={(courseId) => handleOpenCourse(courseId)}
+                  onOpenQuizOrCertificate={handleOpenQuizOrCertificate}
+                  onOpenUpgradeModal={() => setUpgradeModalOpen(true)}
+                  onResetFilters={() => {
+                    setCategoryFilter('all');
+                    setSearchQuery('');
+                  }}
+                />
+
+                {/* Smart Teacher Professional Development Framework (22 Modules · 4 Pillars · 3 Tiers) */}
+                <SmartPdFrameworkSection
+                  courses={allCourses}
+                  completedLessonIds={progress.completedLessonIds}
+                  quizResults={progress.quizResults}
+                  pathwayProgress={pathwayProgress}
+                  unlockedCourseIds={unlockedCourseIds}
+                  onOpenCourse={(courseId, pathwayStep) =>
+                    handleOpenCourse(courseId, undefined, pathwayStep)
+                  }
+                  onOpenQuizOrCertificate={handleOpenQuizOrCertificate}
+                  onOpenUpgradeModal={() => setUpgradeModalOpen(true)}
+                />
+
+                {/* Learning Achievements Preview Band */}
+                <section className="space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-4 border-b border-white/75">
+                    <div className="space-y-1">
+                      <div className="text-xs font-semibold text-[#15803D]">
+                        Learning Achievements · ডিজিটাল দক্ষতা ব্যাজ
+                      </div>
+                      <h2 className="text-2xl font-bold text-[#132219] tracking-tight">
+                        শিখন অর্জন ও সম্মাননা ব্যাজ ({toBengaliDigits(earnedBadgesCount)}/
+                        {toBengaliDigits(evaluatedAchievements.length)})
+                      </h2>
+                      <p className="text-sm text-[#3F5247]">
+                        কোর্স মডিউল সম্পন্ন করে এবং কুইজে উচ্চ নম্বর অর্জন করে আপনার পেশাগত ডিজিটাল ব্যাজ সংগ্রহ করুন।
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => navigateWithGate('achievements')}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-[#132219] btn-3d-glass rounded-xl whitespace-nowrap shrink-0 min-h-[42px] cursor-pointer"
+                    >
+                      <Trophy className="w-4 h-4 text-[#B45309]" />
+                      <span>সব ব্যাজ ও অগ্রগতি দেখুন</span>
+                      <ArrowRight className="w-4 h-4 text-[#15803D]" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                    {[
+                      'tech-savvy-educator',
+                      'pedagogy-pro',
+                      'quiz-ace'
+                    ]
+                      .map((id) => evaluatedAchievements.find((a) => a.id === id))
+                      .filter((a): a is EvaluatedAchievement => Boolean(a))
+                      .map((badge) => (
+                        <div
+                          key={badge.id}
+                          className={`glass-card-3d rounded-2xl p-5 flex flex-col justify-between gap-4 ${
+                            badge.status.unlocked
+                              ? 'ring-1 ring-[#15803D]/30'
+                              : ''
+                          }`}
+                        >
+                          <div className="flex items-start gap-3.5">
+                            <AchievementBadgeEmblem
+                              iconKey={badge.iconKey}
+                              tier={badge.tier}
+                              unlocked={badge.status.unlocked}
+                              size="md"
+                            />
+                            <div className="min-w-0 space-y-1">
+                              <div className="text-xs text-[#3F5247] flex items-center gap-1.5">
+                                <span className="font-semibold text-[#15803D]">
+                                  {badge.tierLabel}
+                                </span>
+                                <span aria-hidden="true">·</span>
+                                <span>
+                                  {badge.status.unlocked ? 'অর্জিত' : 'লক করা'}
+                                </span>
+                              </div>
+                              <h3 className="text-base font-bold font-display text-[#132219] leading-snug">
+                                {badge.titleEn}
+                              </h3>
+                              <div className="text-xs font-semibold text-[#2C3E33]">
+                                {badge.titleBn}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2 pt-2 border-t border-white/75">
+                            <div className="flex items-center justify-between text-xs text-[#3F5247]">
+                              <span>{badge.criteriaLabel}</span>
+                              <span className="font-mono tabular-nums font-semibold text-[#132219] shrink-0 ml-2">
+                                {toBengaliDigits(badge.status.percentage)}%
+                              </span>
+                            </div>
+                            <div className="w-full h-2 glass-well rounded-full overflow-hidden">
+                              <div
+                                className={`h-full transition-transform duration-300 origin-left ${
+                                  badge.status.unlocked
+                                    ? badge.tier === 'gold'
+                                      ? 'bg-[#B45309]'
+                                      : 'bg-gradient-to-r from-[#15803D] to-[#22C55E]'
+                                    : 'bg-[#6A9E7D]'
+                                }`}
+                                style={{
+                                  transform: `scaleX(${badge.status.percentage / 100})`
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </section>
+
+                <TrainingScheduleSection
+                  sessions={TRAINING_SESSIONS}
+                  registeredSessionIds={progress.registeredSessionIds}
+                  onToggleRegister={handleToggleSessionRegister}
+                  onOpenCourse={(courseId) => handleOpenCourse(courseId)}
+                  onOpenFullCalendar={() => navigateWithGate('calendar')}
+                />
+              </>
+            )}
           </div>
         )}
 
-        {activeTab === 'classroom' && (
-          <ClassroomView
-            course={activeCourse}
-            activeLessonId={activeLessonId}
-            teacherName={progress.learnerName}
-            teacherDesignation={progress.designation}
-            teacherSchool={progress.schoolName}
-            completedLessonIds={progress.completedLessonIds}
-            readMaterialIds={progress.readMaterialIds}
-            lessonNotes={progress.lessonNotes ?? {}}
-            customDiscussionPosts={progress.customDiscussionPosts ?? []}
-            customDiscussionReplies={progress.customDiscussionReplies ?? {}}
-            helpfulDiscussionIds={progress.helpfulDiscussionIds ?? []}
-            quizResult={progress.quizResults[activeCourse.id]}
-            onSelectLesson={setActiveLessonId}
-            onToggleLessonComplete={handleToggleLessonComplete}
-            onMarkMaterialRead={handleMarkMaterialRead}
-            onSaveLessonNote={handleSaveLessonNote}
-            onDeleteLessonNote={handleDeleteLessonNote}
-            onCreateDiscussionPost={handleCreateDiscussionPost}
-            onDeleteDiscussionPost={handleDeleteDiscussionPost}
-            onAddDiscussionReply={handleAddDiscussionReply}
-            onToggleDiscussionHelpful={handleToggleDiscussionHelpful}
-            onStudySecondsTick={handleStudySecondsTick}
-            onBackToCatalog={() => setActiveTab('courses')}
-            onGoToQuiz={() => setActiveTab('quiz')}
-            onGoToCertificate={() => setActiveTab('certificate')}
-          />
-        )}
+        {activeTab === 'classroom' &&
+          effectiveAccess.isSignedIn &&
+          effectiveAccess.canAccessFeatures && (
+            <ClassroomView
+              course={activeCourse}
+              activeLessonId={activeLessonId}
+              teacherName={progress.learnerName}
+              teacherDesignation={progress.designation}
+              teacherSchool={progress.schoolName}
+              completedLessonIds={progress.completedLessonIds}
+              readMaterialIds={progress.readMaterialIds}
+              lessonNotes={progress.lessonNotes ?? {}}
+              customDiscussionPosts={progress.customDiscussionPosts ?? []}
+              customDiscussionReplies={progress.customDiscussionReplies ?? {}}
+              helpfulDiscussionIds={progress.helpfulDiscussionIds ?? []}
+              quizResult={progress.quizResults[activeCourse.id]}
+              pathwayProgress={pathwayProgress}
+              achievements={evaluatedAchievements}
+              initialPathwayStep={activePathwayStep}
+              canPlayVideos={effectiveAccess.canPlayVideos}
+              canDownloadMaterials={effectiveAccess.canDownloadMaterials}
+              canTakeQuiz={effectiveAccess.canTakeQuiz}
+              canGetCertificate={effectiveAccess.canGetCertificate}
+              onSavePreAssessment={handleSavePreAssessment}
+              onUpdateInteractive={handleUpdateInteractive}
+              onSubmitAssignment={handleSubmitAssignment}
+              onSelectLesson={setActiveLessonId}
+              onToggleLessonComplete={handleToggleLessonComplete}
+              onMarkMaterialRead={handleMarkMaterialRead}
+              onSaveLessonNote={handleSaveLessonNote}
+              onDeleteLessonNote={handleDeleteLessonNote}
+              onCreateDiscussionPost={handleCreateDiscussionPost}
+              onDeleteDiscussionPost={handleDeleteDiscussionPost}
+              onAddDiscussionReply={handleAddDiscussionReply}
+              onToggleDiscussionHelpful={handleToggleDiscussionHelpful}
+              onStudySecondsTick={handleStudySecondsTick}
+              onBackToCatalog={() => setActiveTab('courses')}
+              onGoToQuiz={() => navigateWithGate('quiz')}
+              onGoToCertificate={() => navigateWithGate('certificate')}
+              onOpenUpgradeModal={() => setUpgradeModalOpen(true)}
+            />
+          )}
 
-        {activeTab === 'materials' && (
-          <MaterialsLibraryView
-            courses={allCourses}
-            uploadedMaterials={visibleUploadedMaterials}
-            readMaterialIds={progress.readMaterialIds}
-            onMarkMaterialRead={handleMarkMaterialRead}
-            onOpenLessonInClassroom={(courseId, lessonId) =>
-              handleOpenCourse(courseId, lessonId)
-            }
-          />
-        )}
-
-        {activeTab === 'quiz' && (
-          <QuizCenterView
-            courses={allCourses}
-            selectedCourseId={activeCourseId}
-            quizResults={progress.quizResults}
-            achievements={evaluatedAchievements}
-            onSelectCourse={setActiveCourseId}
-            onCompleteQuiz={handleCompleteQuiz}
-            onOpenCertificate={(courseId) => {
-              setActiveCourseId(courseId);
-              setActiveTab('certificate');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            onOpenAchievements={() => {
-              setActiveTab('achievements');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-          />
-        )}
-
-        {activeTab === 'calendar' && (
-          <TeacherTrainingCalendarView
-            sessions={TRAINING_SESSIONS}
-            deadlines={CPD_DEADLINES}
-            progress={progress}
-            onToggleRegister={handleToggleSessionRegister}
-            onNavigateToAction={(tab, courseId) => {
-              if (courseId) {
-                const targetCourse =
-                  allCourses.find((c) => c.id === courseId) ??
-                  allCourses[0] ??
-                  COURSES[0];
-                setActiveCourseId(targetCourse.id);
-                setActiveLessonId(targetCourse.lessons[0]?.id ?? '');
+        {activeTab === 'materials' &&
+          effectiveAccess.isSignedIn &&
+          effectiveAccess.canAccessFeatures && (
+            <MaterialsLibraryView
+              courses={allCourses}
+              uploadedMaterials={visibleUploadedMaterials}
+              readMaterialIds={progress.readMaterialIds}
+              canPlayVideos={effectiveAccess.canPlayVideos}
+              canDownloadMaterials={effectiveAccess.canDownloadMaterials}
+              onMarkMaterialRead={handleMarkMaterialRead}
+              onOpenLessonInClassroom={(courseId, lessonId) =>
+                handleOpenCourse(courseId, lessonId)
               }
-              setActiveTab(tab);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-          />
-        )}
+              onOpenUpgradeModal={() => setUpgradeModalOpen(true)}
+            />
+          )}
 
-        {activeTab === 'achievements' && (
-          <AchievementsView
-            achievements={evaluatedAchievements}
-            progress={progress}
-            onNavigateToAction={(tab, courseId) => {
-              if (courseId) {
-                const targetCourse =
-                  allCourses.find((c) => c.id === courseId) ??
-                  allCourses[0] ??
-                  COURSES[0];
-                setActiveCourseId(targetCourse.id);
-                setActiveLessonId(targetCourse.lessons[0]?.id ?? '');
+        {activeTab === 'quiz' &&
+          effectiveAccess.isSignedIn &&
+          effectiveAccess.canAccessFeatures && (
+            <QuizCenterView
+              courses={allCourses}
+              selectedCourseId={activeCourseId}
+              quizResults={progress.quizResults}
+              achievements={evaluatedAchievements}
+              canTakeQuiz={effectiveAccess.canTakeQuiz}
+              unlockedCourseIds={unlockedCourseIds}
+              onSelectCourse={setActiveCourseId}
+              onCompleteQuiz={handleCompleteQuiz}
+              onOpenCertificate={(courseId) => {
+                if (!effectiveAccess.canGetCertificate) {
+                  setUpgradeModalOpen(true);
+                  return;
+                }
+                setActiveCourseId(courseId);
+                setActiveTab('certificate');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              onOpenAchievements={() => navigateWithGate('achievements')}
+              onOpenUpgradeModal={() => setUpgradeModalOpen(true)}
+            />
+          )}
+
+        {activeTab === 'calendar' &&
+          effectiveAccess.isSignedIn &&
+          effectiveAccess.canAccessFeatures && (
+            <TeacherTrainingCalendarView
+              sessions={TRAINING_SESSIONS}
+              deadlines={CPD_DEADLINES}
+              progress={progress}
+              onToggleRegister={handleToggleSessionRegister}
+              onNavigateToAction={(tab, courseId) => {
+                if (courseId) {
+                  const targetCourse =
+                    allCourses.find((c) => c.id === courseId) ??
+                    allCourses[0] ??
+                    COURSES[0];
+                  setActiveCourseId(targetCourse.id);
+                  setActiveLessonId(targetCourse.lessons[0]?.id ?? '');
+                }
+                navigateWithGate(tab);
+              }}
+            />
+          )}
+
+        {activeTab === 'achievements' &&
+          effectiveAccess.isSignedIn &&
+          effectiveAccess.canAccessFeatures && (
+            <AchievementsView
+              achievements={evaluatedAchievements}
+              progress={progress}
+              onNavigateToAction={(tab, courseId) => {
+                if (courseId) {
+                  const targetCourse =
+                    allCourses.find((c) => c.id === courseId) ??
+                    allCourses[0] ??
+                    COURSES[0];
+                  setActiveCourseId(targetCourse.id);
+                  setActiveLessonId(targetCourse.lessons[0]?.id ?? '');
+                }
+                navigateWithGate(tab);
+              }}
+            />
+          )}
+
+        {activeTab === 'certificate' &&
+          effectiveAccess.isSignedIn &&
+          effectiveAccess.canAccessFeatures && (
+            <CertificateStudioView
+              courses={allCourses}
+              selectedCourseId={activeCourseId}
+              learnerName={progress.learnerName}
+              designation={progress.designation}
+              schoolName={progress.schoolName}
+              quizResults={progress.quizResults}
+              canGetCertificate={effectiveAccess.canGetCertificate}
+              onSelectCourse={setActiveCourseId}
+              onUpdateLearnerName={(name) =>
+                setProgress((prev) => ({ ...prev, learnerName: name }))
               }
-              setActiveTab(tab);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-          />
-        )}
+              onUpdateDesignation={(designation) =>
+                setProgress((prev) => ({ ...prev, designation }))
+              }
+              onUpdateSchoolName={(schoolName) =>
+                setProgress((prev) => ({ ...prev, schoolName }))
+              }
+              onGoToQuiz={(courseId) => {
+                setActiveCourseId(courseId);
+                navigateWithGate('quiz');
+              }}
+              onOpenUpgradeModal={() => setUpgradeModalOpen(true)}
+            />
+          )}
 
-        {activeTab === 'certificate' && (
-          <CertificateStudioView
-            courses={allCourses}
-            selectedCourseId={activeCourseId}
-            learnerName={progress.learnerName}
-            designation={progress.designation}
-            schoolName={progress.schoolName}
-            quizResults={progress.quizResults}
-            onSelectCourse={setActiveCourseId}
-            onUpdateLearnerName={(name) =>
-              setProgress((prev) => ({ ...prev, learnerName: name }))
-            }
-            onUpdateDesignation={(designation) =>
-              setProgress((prev) => ({ ...prev, designation }))
-            }
-            onUpdateSchoolName={(schoolName) =>
-              setProgress((prev) => ({ ...prev, schoolName }))
-            }
-            onGoToQuiz={(courseId) => {
-              setActiveCourseId(courseId);
-              setActiveTab('quiz');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-          />
-        )}
-
-        {activeTab === 'admin' && isAdmin && (
+        {activeTab === 'admin' && effectiveAccess.isSignedIn && (
           <AdminPanelView
             authUser={authUser}
-            builtInCourses={COURSES}
+            isSuperAdmin={isSuperAdmin}
+            canManageModules={canManageModules}
+            allManagedCourses={allManagedCourses}
             customCourses={customCourses}
+            builtInIds={builtInIds}
+            overrideIds={overrideIds}
+            hiddenCourseIds={moduleLayout.hiddenCourseIds}
             uploadedMaterials={uploadedMaterials}
-            onSaveCourse={handleSaveCourse}
+            accessConfig={accessConfig}
+            userAccessList={allUserAccessList}
+            paymentRequests={allPaymentRequests}
+            adminRoles={allAdminRoles}
+            onSaveModule={handleSaveModule}
+            onRevertBuiltInOverride={handleRevertBuiltInOverride}
             onDeleteCourse={handleDeleteCourse}
+            onReorderModules={handleReorderModules}
+            onToggleModuleVisibility={handleToggleModuleVisibility}
+            onBatchRenumberModules={handleBatchRenumberModules}
+            onResetLayoutToDefault={handleResetLayoutToDefault}
             onSaveMaterial={handleSaveMaterial}
             onDeleteMaterial={handleDeleteMaterial}
+            onSaveAccessControl={handleSaveAccessControl}
+            onUpdateUserAccess={handleSuperAdminUpdateUserAccess}
+            onReviewPaymentRequest={handleReviewPaymentRequest}
+            onToggleModuleManagerRole={handleToggleModuleManagerRole}
             onOpenLogin={() => setLoginOpen(true)}
             onOpenCourseInClassroom={(courseId) => handleOpenCourse(courseId)}
-            onOpenMaterialsLibrary={() => {
-              setActiveTab('materials');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            onBackToCourses={() => {
-              setActiveTab('courses');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
+            onOpenMaterialsLibrary={() => navigateWithGate('materials')}
           />
         )}
       </main>
@@ -1699,49 +2925,48 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab('materials')}
+              onClick={() => navigateWithGate('materials')}
               className="hover:text-[#132219] transition-colors cursor-pointer"
             >
               লেসন প্ল্যান
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab('quiz')}
+              onClick={() => navigateWithGate('quiz')}
               className="hover:text-[#132219] transition-colors cursor-pointer"
             >
               মূল্যায়ন কুইজ
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab('calendar')}
+              onClick={() => navigateWithGate('calendar')}
               className="hover:text-[#132219] transition-colors cursor-pointer"
             >
               প্রশিক্ষণ ক্যালেন্ডার
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab('achievements')}
+              onClick={() => navigateWithGate('achievements')}
               className="hover:text-[#132219] transition-colors cursor-pointer"
             >
               অর্জন ও ব্যাজ
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab('certificate')}
+              onClick={() => navigateWithGate('certificate')}
               className="hover:text-[#132219] transition-colors cursor-pointer"
             >
               CPD সনদ
             </button>
-            {isAdmin && (
+            {effectiveAccess.canManageModules && (
               <button
                 type="button"
-                onClick={() => {
-                  setActiveTab('admin');
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                }}
+                onClick={() => navigateWithGate('admin')}
                 className="hover:text-[#132219] transition-colors cursor-pointer"
               >
-                অ্যাডমিন প্যানেল
+                {effectiveAccess.isSuperAdmin
+                  ? 'সুপার অ্যাডমিন'
+                  : 'মডিউল ম্যানেজার'}
               </button>
             )}
           </div>
@@ -1768,10 +2993,7 @@ export default function App() {
         }
         onResetProgress={handleResetProgress}
         onJumpToCourse={(courseId) => handleOpenCourse(courseId)}
-        onOpenAchievements={() => {
-          setActiveTab('achievements');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
+        onOpenAchievements={() => navigateWithGate('achievements')}
       />
 
       <LoginPanelModal
@@ -1781,8 +3003,30 @@ export default function App() {
         learnerName={progress.learnerName}
         designation={progress.designation}
         schoolName={progress.schoolName}
+        freeTrialDays={accessConfig.freeTrialDays}
+        annualPriceBdt={accessConfig.annualPriceBdt}
         onClose={() => setLoginOpen(false)}
-        onOpenProfile={() => setProfileOpen(true)}
+        onOpenProfile={() => {
+          if (effectiveAccess.isSignedIn) {
+            setProfileOpen(true);
+          }
+        }}
+      />
+
+      <AccessUpgradeModal
+        isOpen={upgradeModalOpen}
+        authUser={authUser}
+        learnerName={progress.learnerName}
+        totalModulesCount={allCourses.length}
+        accessConfig={accessConfig}
+        effectiveAccess={effectiveAccess}
+        userPaymentRequests={userPaymentRequests}
+        onClose={() => setUpgradeModalOpen(false)}
+        onOpenLogin={() => {
+          setUpgradeModalOpen(false);
+          setLoginOpen(true);
+        }}
+        onSubmitPaymentRequest={handleSubmitPaymentRequest}
       />
 
       {/* Non-intrusive Achievement Unlocked Toast */}

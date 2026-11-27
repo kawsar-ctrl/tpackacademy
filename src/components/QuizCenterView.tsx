@@ -4,6 +4,8 @@ import {
   Award,
   CheckCircle2,
   ChevronRight,
+  Crown,
+  Lock,
   RotateCcw,
   Trophy
 } from 'lucide-react';
@@ -16,10 +18,13 @@ interface QuizCenterViewProps {
   selectedCourseId: string;
   quizResults: Record<string, QuizResult>;
   achievements: EvaluatedAchievement[];
+  canTakeQuiz?: boolean;
+  unlockedCourseIds?: Set<string>;
   onSelectCourse: (courseId: string) => void;
   onCompleteQuiz: (result: QuizResult) => void;
   onOpenCertificate: (courseId: string) => void;
   onOpenAchievements: () => void;
+  onOpenUpgradeModal?: () => void;
 }
 
 export const QuizCenterView: React.FC<QuizCenterViewProps> = ({
@@ -27,13 +32,19 @@ export const QuizCenterView: React.FC<QuizCenterViewProps> = ({
   selectedCourseId,
   quizResults,
   achievements,
+  canTakeQuiz = true,
+  unlockedCourseIds,
   onSelectCourse,
   onCompleteQuiz,
   onOpenCertificate,
-  onOpenAchievements
+  onOpenAchievements,
+  onOpenUpgradeModal
 }) => {
   const course =
     courses.find((c) => c.id === selectedCourseId) ?? courses[0];
+  const isCourseLocked = Boolean(
+    !canTakeQuiz || (unlockedCourseIds && course && !unlockedCourseIds.has(course.id))
+  );
 
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [submittedCourseId, setSubmittedCourseId] = useState<string | null>(
@@ -118,6 +129,9 @@ export const QuizCenterView: React.FC<QuizCenterViewProps> = ({
         {courses.map((c) => {
           const isActive = c.id === course.id;
           const res = quizResults[c.id];
+          const lockedItem = Boolean(
+            !canTakeQuiz || (unlockedCourseIds && !unlockedCourseIds.has(c.id))
+          );
           return (
             <button
               key={c.id}
@@ -132,13 +146,20 @@ export const QuizCenterView: React.FC<QuizCenterViewProps> = ({
                   : 'text-[#3F5247] hover:text-[#132219] hover:bg-white/40'
               }`}
             >
-              <div className="text-sm font-semibold truncate">{c.title}</div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold truncate">{c.title}</span>
+                {lockedItem && (
+                  <Lock className="w-3.5 h-3.5 text-[#B45309] shrink-0" />
+                )}
+              </div>
               <div className="text-xs font-mono tabular-nums text-[#3F5247] mt-0.5">
-                {res
-                  ? res.passed
-                    ? `উত্তীর্ণ · ${toBengaliDigits(res.percentage)}%`
-                    : `সর্বশেষ: ${toBengaliDigits(res.percentage)}%`
-                  : 'এখনো অংশগ্রহণ করা হয়নি'}
+                {lockedItem
+                  ? 'প্রো প্ল্যান প্রয়োজন'
+                  : res
+                    ? res.passed
+                      ? `উত্তীর্ণ · ${toBengaliDigits(res.percentage)}%`
+                      : `সর্বশেষ: ${toBengaliDigits(res.percentage)}%`
+                    : 'এখনো অংশগ্রহণ করা হয়নি'}
               </div>
             </button>
           );
@@ -268,8 +289,34 @@ export const QuizCenterView: React.FC<QuizCenterViewProps> = ({
         </div>
       )}
 
-      {/* Questions Form */}
-      {questions.length === 0 ? (
+      {/* Questions Form or Upgrade Lock */}
+      {isCourseLocked ? (
+        <div className="glass-surface rounded-2xl p-10 text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl glass-3d-icon-well flex items-center justify-center mx-auto text-[#B45309]">
+            <Lock className="w-6 h-6" />
+          </div>
+          <div className="space-y-1.5 max-w-lg mx-auto">
+            <h2 className="text-lg font-bold text-[#132219]">
+              এই মডিউলের কুইজ আনলক করতে প্রো প্ল্যান প্রয়োজন
+            </h2>
+            <p className="text-xs sm:text-sm text-[#3F5247]">
+              {!canTakeQuiz
+                ? 'ফ্রি ট্রায়াল নীতিমালায় বর্তমানে কুইজ সীমিত রয়েছে। ১,০০০ টাকায় ১ বছরের ফুল এক্সেস নিলে সব মডিউলের মূল্যায়ন কুইজ উন্মুক্ত হবে।'
+                : 'ফ্রি ট্রায়ালে কেবল প্রথম কয়েকটি মডিউলের কুইজ উন্মুক্ত থাকে। ১,০০০ টাকায় ১ বছরের ফুল এক্সেস নিয়ে এই মডিউলের কুইজ দিন।'}
+            </p>
+          </div>
+          {onOpenUpgradeModal && (
+            <button
+              type="button"
+              onClick={onOpenUpgradeModal}
+              className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold btn-3d-emerald rounded-xl cursor-pointer"
+            >
+              <Crown className="w-4 h-4" />
+              <span>১,০০০ টাকায় ফুল এক্সেস নিন</span>
+            </button>
+          )}
+        </div>
+      ) : questions.length === 0 ? (
         <div className="glass-surface rounded-2xl p-8 text-center space-y-2">
           <h2 className="text-base font-bold text-[#132219]">
             এই কোর্সে এখনো কোনো কুইজ প্রশ্ন যুক্ত করা হয়নি

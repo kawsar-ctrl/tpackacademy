@@ -4,6 +4,7 @@ import {
   Building2,
   CheckCircle2,
   ClipboardCheck,
+  Crown,
   Download,
   Lock,
   Printer,
@@ -19,11 +20,13 @@ interface CertificateStudioViewProps {
   designation: string;
   schoolName: string;
   quizResults: Record<string, QuizResult>;
+  canGetCertificate?: boolean;
   onSelectCourse: (courseId: string) => void;
   onUpdateLearnerName: (name: string) => void;
   onUpdateDesignation: (designation: string) => void;
   onUpdateSchoolName: (schoolName: string) => void;
   onGoToQuiz: (courseId: string) => void;
+  onOpenUpgradeModal?: () => void;
 }
 
 export const CertificateStudioView: React.FC<CertificateStudioViewProps> = ({
@@ -33,11 +36,13 @@ export const CertificateStudioView: React.FC<CertificateStudioViewProps> = ({
   designation,
   schoolName,
   quizResults,
+  canGetCertificate = true,
   onSelectCourse,
   onUpdateLearnerName,
   onUpdateDesignation,
   onUpdateSchoolName,
-  onGoToQuiz
+  onGoToQuiz,
+  onOpenUpgradeModal
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const course =
@@ -379,7 +384,33 @@ export const CertificateStudioView: React.FC<CertificateStudioViewProps> = ({
       </div>
 
       {/* Certificate Stage or Locked Prompt */}
-      {isUnlocked && result ? (
+      {!canGetCertificate ? (
+        <div className="glass-surface rounded-2xl p-10 sm:p-14 text-center space-y-4">
+          <div className="w-14 h-14 rounded-2xl glass-3d-icon-well flex items-center justify-center mx-auto text-[#B45309]">
+            <Lock className="w-6 h-6" />
+          </div>
+          <div className="space-y-1.5 max-w-lg mx-auto">
+            <h2 className="text-xl font-bold text-[#132219]">
+              CPD সার্টিফিকেট প্রিন্ট ও ডাউনলোড প্রো প্ল্যানে উন্মুক্ত
+            </h2>
+            <p className="text-sm text-[#3F5247] leading-relaxed">
+              ৭ দিনের ফ্রি লিমিটেড ট্রায়ালে অফিশিয়াল CPD সার্টিফিকেট ডাউনলোড সীমাবদ্ধ রাখা হয়েছে। ১,০০০ টাকায় ১ বছরের ফুল এক্সেস সক্রিয় করলে সব উত্তীর্ণ কোর্সের সনদ ডাউনলোড করতে পারবেন।
+            </p>
+          </div>
+          {onOpenUpgradeModal && (
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={onOpenUpgradeModal}
+                className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold btn-3d-emerald rounded-xl min-h-[44px] cursor-pointer"
+              >
+                <Crown className="w-4 h-4" />
+                <span>১,০০০ টাকায় ১ বছরের ফুল এক্সেস নিন</span>
+              </button>
+            </div>
+          )}
+        </div>
+      ) : isUnlocked && result ? (
         <div className="space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 glass-surface rounded-2xl p-4 sm:p-5">
             <div className="flex items-center gap-3 text-sm">

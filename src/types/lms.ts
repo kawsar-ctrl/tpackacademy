@@ -61,6 +61,45 @@ export interface QuizQuestion {
   explanation: string;
 }
 
+export interface CoursePathwayConfig {
+  preAssessmentQuestions?: {
+    id: string;
+    prompt: string;
+    options: string[];
+    correctIndex: number;
+    diagnosticNote: string;
+  }[];
+  interactiveMicroQuiz?: {
+    question: string;
+    options: string[];
+    correctIndex: number;
+    explanation: string;
+  };
+  interactiveDragSteps?: string[];
+  interactiveScenario?: {
+    context: string;
+    challenge: string;
+    choices: {
+      text: string;
+      isBest: boolean;
+      feedback: string;
+    }[];
+  };
+  assignmentDefaults?: {
+    defaultType: AssignmentArtifactType;
+    title: string;
+    gradeAndDuration: string;
+    learningObjective: string;
+    activitiesAndMaterials: string;
+    assessmentMethod: string;
+  };
+}
+
+export interface ModuleLayoutConfig {
+  orderedIds: string[];
+  hiddenCourseIds: string[];
+}
+
 export interface Course {
   id: string;
   title: string;
@@ -76,6 +115,7 @@ export interface Course {
   description: string;
   lessons: Lesson[];
   quiz: QuizQuestion[];
+  pathwayConfig?: CoursePathwayConfig;
 }
 
 export interface QuizResult {
@@ -258,6 +298,7 @@ export interface CustomCourseRecord extends Course {
   published: boolean;
   createdByUid?: string;
   isCustom?: boolean;
+  orderIndex?: number;
 }
 
 export interface UploadedMaterialItem {
@@ -280,6 +321,148 @@ export interface UploadedMaterialItem {
   attachmentName: string;
   attachmentContent: string;
   attachmentMimeType: string;
+  videoSourceType?: 'none' | 'link' | 'upload';
+  videoUrl?: string;
+  videoFileName?: string;
+  videoFileSizeLabel?: string;
+  videoMimeType?: string;
   published: boolean;
   createdByUid?: string;
 }
+
+export type PathwayStepId =
+  | 'pre-assessment'
+  | 'video-lessons'
+  | 'interactive-learning'
+  | 'practical-assignment'
+  | 'certification';
+
+export interface PreAssessmentResult {
+  courseId: string;
+  score: number;
+  total: number;
+  percentage: number;
+  readinessLabel: string;
+  completedAt: string;
+}
+
+export interface InteractiveLearningResult {
+  courseId: string;
+  quizChecked: boolean;
+  dragDropSolved: boolean;
+  scenarioSolved: boolean;
+  completedAt?: string;
+}
+
+export type AssignmentArtifactType =
+  | 'lesson-plan'
+  | 'worksheet'
+  | 'digital-content';
+
+export interface PracticalAssignmentSubmission {
+  courseId: string;
+  artifactType: AssignmentArtifactType;
+  title: string;
+  gradeAndDuration: string;
+  learningObjective: string;
+  activitiesAndMaterials: string;
+  assessmentMethod: string;
+  attachmentName?: string;
+  submittedAt: string;
+}
+
+export interface CertificationPathwayProgress {
+  preAssessments: Record<string, PreAssessmentResult>;
+  interactiveResults: Record<string, InteractiveLearningResult>;
+  assignments: Record<string, PracticalAssignmentSubmission>;
+}
+
+export type UserPlanTier = 'free_trial' | 'annual_pro' | 'suspended';
+
+export interface UserAccessRecord {
+  uid: string;
+  email: string;
+  displayName: string;
+  planTier: UserPlanTier;
+  trialStartedAtMs: number;
+  trialEndsAtMs: number;
+  proActivatedAtMs: number;
+  proExpiresAtMs: number;
+  allowFullOverride: boolean;
+  customNote: string;
+  updatedAtMs: number;
+}
+
+export interface AccessControlConfig {
+  freeTrialDays: number;
+  freeTrialMaxModules: number;
+  freeTrialAllowVideos: boolean;
+  freeTrialAllowMaterialsDownload: boolean;
+  freeTrialAllowQuiz: boolean;
+  freeTrialAllowCertificate: boolean;
+  annualPriceBdt: number;
+  annualDurationDays: number;
+  paymentInstructions: string;
+  maintenanceMode: boolean;
+  updatedByUid?: string;
+}
+
+export type PaymentMethodType = 'bKash' | 'Nagad' | 'Rocket' | 'Bank';
+
+export type PaymentRequestStatus = 'pending' | 'approved' | 'rejected';
+
+export interface PaymentRequestRecord {
+  id: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  method: PaymentMethodType;
+  senderPhone: string;
+  transactionId: string;
+  amountBdt: number;
+  note: string;
+  status: PaymentRequestStatus;
+  reviewedByUid: string;
+  reviewNote: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface AdminRoleRecord {
+  uid: string;
+  email: string;
+  displayName: string;
+  role: 'module_manager';
+  grantedByUid: string;
+}
+
+export type AccessStatusKind =
+  | 'guest'
+  | 'super_admin'
+  | 'module_manager'
+  | 'annual_pro'
+  | 'free_trial'
+  | 'trial_expired'
+  | 'suspended'
+  | 'maintenance';
+
+export interface EffectiveAccessState {
+  status: AccessStatusKind;
+  isSignedIn: boolean;
+  isSuperAdmin: boolean;
+  isModuleManager: boolean;
+  isProActive: boolean;
+  isTrialActive: boolean;
+  daysRemaining: number;
+  allowedModuleCount: number; // Infinity when unlimited
+  canAccessFeatures: boolean;
+  canPlayVideos: boolean;
+  canDownloadMaterials: boolean;
+  canTakeQuiz: boolean;
+  canGetCertificate: boolean;
+  canManageModules: boolean;
+  canControlPlatform: boolean;
+  statusLabelBn: string;
+  statusDetailBn: string;
+}
+

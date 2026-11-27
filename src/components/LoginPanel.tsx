@@ -13,6 +13,7 @@ import {
   X
 } from 'lucide-react';
 import { signInWithGoogle, signOutAccount } from '../firebase';
+import { toBengaliDigits } from '../utils/lmsHelpers';
 
 interface LoginPanelModalProps {
   isOpen: boolean;
@@ -21,6 +22,8 @@ interface LoginPanelModalProps {
   learnerName: string;
   designation: string;
   schoolName: string;
+  freeTrialDays?: number;
+  annualPriceBdt?: number;
   onClose: () => void;
   onOpenProfile: () => void;
 }
@@ -56,6 +59,8 @@ export const LoginPanelModal: React.FC<LoginPanelModalProps> = ({
   learnerName,
   designation,
   schoolName,
+  freeTrialDays = 7,
+  annualPriceBdt = 1000,
   onClose,
   onOpenProfile
 }) => {
@@ -222,10 +227,11 @@ export const LoginPanelModal: React.FC<LoginPanelModalProps> = ({
             <div className="space-y-5">
               <div className="space-y-2">
                 <h3 className="text-base font-bold text-[#132219]">
-                  শিক্ষক প্রশিক্ষণ পোর্টালে সাইন ইন করুন
+                  ফিচারসমূহ ব্যবহার করতে Google দিয়ে লগইন করুন
                 </h3>
                 <p className="text-sm text-[#3F5247] leading-relaxed">
-                  আপনার Google অ্যাকাউন্ট দিয়ে সাইন ইন করলে যেকোনো ডিভাইস থেকে কোর্স অগ্রগতি, কুইজ নম্বর, ব্যক্তিগত নোট এবং CPD সার্টিফিকেট সংরক্ষণ করতে পারবেন।
+                  লগইন ছাড়া কোর্স, প্রশিক্ষণ উপকরণ, কুইজ ও সার্টিফিকেট ব্যবহার করা যাবে না। সাইন ইন করলে স্বয়ংক্রিয়ভাবে{' '}
+                  <strong>{toBengaliDigits(freeTrialDays)} দিনের ফ্রি লিমিটেড এক্সেস</strong> চালু হবে।
                 </p>
               </div>
 
@@ -233,11 +239,15 @@ export const LoginPanelModal: React.FC<LoginPanelModalProps> = ({
               <ul className="space-y-2.5 text-xs text-[#2C3E33] glass-well rounded-xl p-4">
                 <li className="flex items-start gap-2">
                   <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
-                  <span>কোর্স মডিউল, অধ্যয়ন সময় ও ব্যক্তিগত নোট ক্লাউডে সংরক্ষণ</span>
+                  <span>
+                    লগইনের পর {toBengaliDigits(freeTrialDays)} দিন ফ্রি লিমিটেড এক্সেস
+                  </span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Award className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
-                  <span>অর্জিত ডিজিটাল ব্যাজ ও CPD সার্টিফিকেট তথ্য সুরক্ষিত রাখা</span>
+                  <span>
+                    মাত্র ৳{toBengaliDigits(annualPriceBdt)} টাকায় ১ বছরের সব মডিউল, ভিডিও ও CPD সার্টিফিকেট ফুল এক্সেস
+                  </span>
                 </li>
                 <li className="flex items-start gap-2">
                   <ShieldCheck className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
@@ -271,7 +281,7 @@ export const LoginPanelModal: React.FC<LoginPanelModalProps> = ({
                   onClick={onClose}
                   className="w-full px-4 py-2.5 text-xs font-medium text-[#3F5247] hover:text-[#132219] transition-colors cursor-pointer"
                 >
-                  অতিথি হিসেবে ব্রাউজ করা চালিয়ে যান
+                  এখন নয় (বন্ধ করুন)
                 </button>
               </div>
             </div>
@@ -286,6 +296,8 @@ interface InlineLoginPanelProps {
   authUser: User | null;
   authLoading: boolean;
   learnerName: string;
+  freeTrialDays?: number;
+  annualPriceBdt?: number;
   onOpenLoginModal: () => void;
   onSignOut: () => void;
 }
@@ -294,6 +306,8 @@ export const InlineLoginPanel: React.FC<InlineLoginPanelProps> = ({
   authUser,
   authLoading,
   learnerName,
+  freeTrialDays = 7,
+  annualPriceBdt = 1000,
   onOpenLoginModal,
   onSignOut
 }) => {
@@ -391,13 +405,13 @@ export const InlineLoginPanel: React.FC<InlineLoginPanelProps> = ({
         </div>
         <div className="space-y-1">
           <div className="text-xs font-semibold text-[#15803D]">
-            শিক্ষক অ্যাকাউন্ট লগইন প্যানেল · ক্লাউড সিঙ্ক
+            শিক্ষক অ্যাকাউন্ট লগইন গেট · {toBengaliDigits(freeTrialDays)} দিন ফ্রি ট্রায়াল ও প্রো প্ল্যান
           </div>
           <h2 className="text-base sm:text-lg font-bold text-[#132219]">
-            আপনার প্রশিক্ষণ অগ্রগতি ও CPD সনদ নিরাপদে সংরক্ষণ করতে সাইন ইন করুন
+            সকল কোর্স, ভিডিও ও মূল্যায়ন ফিচার চালু করতে সাইন ইন করুন
           </h2>
           <p className="text-xs sm:text-sm text-[#3F5247] leading-relaxed">
-            Google অ্যাকাউন্ট দিয়ে লগইন করলে আপনার সম্পন্ন মডিউল, কুইজ স্কোর, ব্যক্তিগত নোট ও ডিজিটাল ব্যাজ ক্লাউডে সংরক্ষিত থাকবে।
+            লগইন করলে প্রথম {toBengaliDigits(freeTrialDays)} দিন ফ্রি লিমিটেড এক্সেস পাবেন। মাত্র ৳{toBengaliDigits(annualPriceBdt)} টাকায় ১ বছরের সম্পূর্ণ মডিউল, ভিডিও ও CPD সার্টিফিকেট আনলক করা যাবে।
           </p>
           {inlineError && (
             <p className="text-xs font-medium text-[#B91C1C] pt-1">

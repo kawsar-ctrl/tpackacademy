@@ -1,41 +1,51 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
-import { Leaf, LogIn, Menu, X } from 'lucide-react';
-import { NavTab } from '../types/lms';
+import { Crown, Leaf, LogIn, Menu, ShieldCheck, X } from 'lucide-react';
+import { EffectiveAccessState, NavTab } from '../types/lms';
 
 interface TopBarProps {
   activeTab: NavTab;
   authUser: User | null;
   authLoading: boolean;
-  isAdmin: boolean;
+  canManageModules: boolean;
+  effectiveAccess: EffectiveAccessState;
   onNavigate: (tab: NavTab) => void;
   onOpenProfile: () => void;
   onOpenLogin: () => void;
+  onOpenUpgrade: () => void;
 }
 
-const NAV_ITEMS: { id: NavTab; label: string }[] = [
+const BASE_NAV_ITEMS: { id: NavTab; label: string }[] = [
   { id: 'courses', label: 'কোর্সসমূহ' },
   { id: 'materials', label: 'প্রশিক্ষণ উপকরণ' },
   { id: 'quiz', label: 'কুইজ' },
   { id: 'calendar', label: 'প্রশিক্ষণ ক্যালেন্ডার' },
   { id: 'achievements', label: 'অর্জন ও ব্যাজ' },
-  { id: 'certificate', label: 'সার্টিফিকেট' },
-  { id: 'admin', label: 'অ্যাডমিন' }
+  { id: 'certificate', label: 'সার্টিফিকেট' }
 ];
 
 export const TopBar: React.FC<TopBarProps> = ({
   activeTab,
   authUser,
   authLoading,
-  isAdmin,
+  canManageModules,
+  effectiveAccess,
   onNavigate,
   onOpenProfile,
-  onOpenLogin
+  onOpenLogin,
+  onOpenUpgrade
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const visibleNavItems = isAdmin
-    ? NAV_ITEMS
-    : NAV_ITEMS.filter((item) => item.id !== 'admin');
+
+  const visibleNavItems = canManageModules
+    ? [
+        ...BASE_NAV_ITEMS,
+        {
+          id: 'admin' as NavTab,
+          label: effectiveAccess.isSuperAdmin ? 'সুপার অ্যাডমিন' : 'মডিউল ম্যানেজার'
+        }
+      ]
+    : BASE_NAV_ITEMS;
 
   const handleNavClick = (tab: NavTab) => {
     onNavigate(tab);
@@ -48,8 +58,8 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   return (
     <header className="sticky top-0 z-40 glass-header">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3 lg:gap-5">
-        {/* Zone 1: Brand Title (single line, no badges) */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3 lg:gap-4">
+        {/* Zone 1: Brand Title */}
         <a
           href="#top"
           onClick={(e) => {
@@ -67,7 +77,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* Zone 2: Navigation links */}
         <nav
           aria-label="প্রধান নেভিগেশন"
-          className="hidden md:flex items-center gap-3 lg:gap-5 text-[13px] lg:text-sm font-medium"
+          className="hidden md:flex items-center gap-3 lg:gap-4 text-[13px] lg:text-sm font-medium"
         >
           {visibleNavItems.map((item) => {
             const isActive =
@@ -90,8 +100,24 @@ export const TopBar: React.FC<TopBarProps> = ({
           })}
         </nav>
 
-        {/* Zone 3: Login + Profile Actions + Mobile toggle */}
-        <div className="flex items-center gap-2.5 shrink-0">
+        {/* Zone 3: Plan Status + Login + Profile Actions + Mobile toggle */}
+        <div className="flex items-center gap-2 shrink-0">
+          {effectiveAccess.isSignedIn && !effectiveAccess.isSuperAdmin && (
+            <button
+              type="button"
+              onClick={onOpenUpgrade}
+              title={effectiveAccess.statusDetailBn}
+              className={`hidden xl:inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 cursor-pointer min-h-[40px] ${
+                effectiveAccess.isProActive
+                  ? 'btn-3d-glass text-[#15803D] ring-1 ring-[#15803D]/30'
+                  : 'btn-3d-glass text-[#B45309] ring-1 ring-[#D97706]/35'
+              }`}
+            >
+              <Crown className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>{effectiveAccess.statusLabelBn}</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onOpenLogin}
@@ -112,7 +138,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                     {shortDisplayName.charAt(0)}
                   </span>
                 )}
-                <span className="max-w-[96px] truncate">{shortDisplayName}</span>
+                <span className="max-w-[90px] truncate">{shortDisplayName}</span>
               </>
             ) : (
               <>
@@ -122,13 +148,15 @@ export const TopBar: React.FC<TopBarProps> = ({
             )}
           </button>
 
-          <button
-            type="button"
-            onClick={onOpenProfile}
-            className="hidden sm:inline-flex items-center justify-center px-4 py-2 text-sm font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#15803D] cursor-pointer min-h-[40px]"
-          >
-            শিক্ষক প্রোফাইল
-          </button>
+          {effectiveAccess.isSignedIn && (
+            <button
+              type="button"
+              onClick={onOpenProfile}
+              className="hidden sm:inline-flex items-center justify-center px-3.5 py-2 text-sm font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#15803D] cursor-pointer min-h-[40px]"
+            >
+              প্রোফাইল
+            </button>
+          )}
 
           <button
             type="button"
@@ -165,6 +193,29 @@ export const TopBar: React.FC<TopBarProps> = ({
             );
           })}
           <div className="pt-2 border-t border-white/75 space-y-2">
+            {effectiveAccess.isSignedIn && !effectiveAccess.isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onOpenUpgrade();
+                }}
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold text-[#B45309] btn-3d-glass rounded-xl min-h-[44px] cursor-pointer"
+              >
+                <Crown className="w-4 h-4" aria-hidden="true" />
+                <span>{effectiveAccess.statusLabelBn}</span>
+              </button>
+            )}
+            {effectiveAccess.isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => handleNavClick('admin')}
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold text-[#15803D] btn-3d-glass rounded-xl min-h-[44px] cursor-pointer"
+              >
+                <ShieldCheck className="w-4 h-4" aria-hidden="true" />
+                <span>সুপার অ্যাডমিন কন্ট্রোল</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -176,16 +227,18 @@ export const TopBar: React.FC<TopBarProps> = ({
               <LogIn className="w-4 h-4 text-[#15803D]" aria-hidden="true" />
               <span>{authUser ? `${shortDisplayName} · অ্যাকাউন্ট` : 'Google দিয়ে লগইন'}</span>
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMobileMenuOpen(false);
-                onOpenProfile();
-              }}
-              className="w-full px-4 py-2.5 text-sm font-semibold btn-3d-emerald rounded-xl min-h-[44px] cursor-pointer"
-            >
-              শিক্ষক প্রোফাইল
-            </button>
+            {effectiveAccess.isSignedIn && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onOpenProfile();
+                }}
+                className="w-full px-4 py-2.5 text-sm font-semibold btn-3d-emerald rounded-xl min-h-[44px] cursor-pointer"
+              >
+                শিক্ষক প্রোফাইল
+              </button>
+            )}
           </div>
         </div>
       )}

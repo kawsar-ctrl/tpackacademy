@@ -201,6 +201,14 @@
           "type": "array",
           "description": "Course evaluation quiz questions (max 30)."
         },
+        "pathwayConfig": {
+          "type": "object",
+          "description": "Optional custom 5-step certification pathway configuration."
+        },
+        "orderIndex": {
+          "type": "number",
+          "description": "Optional display order index for course sequencing."
+        },
         "published": {
           "type": "boolean"
         },
@@ -309,6 +317,26 @@
           "type": "string",
           "maxLength": 100
         },
+        "videoSourceType": {
+          "type": "string",
+          "enum": ["none", "link", "upload"]
+        },
+        "videoUrl": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "videoFileName": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "videoFileSizeLabel": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "videoMimeType": {
+          "type": "string",
+          "maxLength": 100
+        },
         "published": {
           "type": "boolean"
         },
@@ -347,6 +375,169 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "ModuleLayoutDoc": {
+      "title": "ModuleLayoutDoc",
+      "description": "Global display order and hidden visibility list for all training modules.",
+      "type": "object",
+      "properties": {
+        "orderedIds": {
+          "type": "array",
+          "description": "Ordered list of course IDs (max 150)."
+        },
+        "hiddenCourseIds": {
+          "type": "array",
+          "description": "List of hidden course IDs (max 150)."
+        },
+        "updatedByUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "orderedIds",
+        "hiddenCourseIds",
+        "updatedByUid",
+        "updatedAt"
+      ]
+    },
+    "AccessControlDoc": {
+      "title": "AccessControlDoc",
+      "description": "Super Admin platform-wide trial, annual pro pricing, and access control policy.",
+      "type": "object",
+      "properties": {
+        "freeTrialDays": { "type": "number" },
+        "freeTrialMaxModules": { "type": "number" },
+        "freeTrialAllowVideos": { "type": "boolean" },
+        "freeTrialAllowMaterialsDownload": { "type": "boolean" },
+        "freeTrialAllowQuiz": { "type": "boolean" },
+        "freeTrialAllowCertificate": { "type": "boolean" },
+        "annualPriceBdt": { "type": "number" },
+        "annualDurationDays": { "type": "number" },
+        "paymentInstructions": { "type": "string", "maxLength": 1000 },
+        "maintenanceMode": { "type": "boolean" },
+        "updatedByUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "freeTrialDays",
+        "freeTrialMaxModules",
+        "freeTrialAllowVideos",
+        "freeTrialAllowMaterialsDownload",
+        "freeTrialAllowQuiz",
+        "freeTrialAllowCertificate",
+        "annualPriceBdt",
+        "annualDurationDays",
+        "paymentInstructions",
+        "maintenanceMode",
+        "updatedByUid",
+        "updatedAt"
+      ]
+    },
+    "UserAccessDoc": {
+      "title": "UserAccessDoc",
+      "description": "Server-validated user subscription tier (7-day free trial or 1-year annual pro) controlled by Super Admin.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "planTier": { "type": "string", "enum": ["free_trial", "annual_pro", "suspended"] },
+        "trialStartedAtMs": { "type": "number" },
+        "trialEndsAtMs": { "type": "number" },
+        "proActivatedAtMs": { "type": "number" },
+        "proExpiresAtMs": { "type": "number" },
+        "allowFullOverride": { "type": "boolean" },
+        "customNote": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "email",
+        "displayName",
+        "planTier",
+        "trialStartedAtMs",
+        "trialEndsAtMs",
+        "proActivatedAtMs",
+        "proExpiresAtMs",
+        "allowFullOverride",
+        "customNote",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PaymentRequestDoc": {
+      "title": "PaymentRequestDoc",
+      "description": "Teacher payment verification request for ৳1,000 1-year full access.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "format": "email", "maxLength": 254 },
+        "userName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "method": { "type": "string", "enum": ["bKash", "Nagad", "Rocket", "Bank"] },
+        "senderPhone": { "type": "string", "minLength": 6, "maxLength": 30 },
+        "transactionId": { "type": "string", "minLength": 3, "maxLength": 80 },
+        "amountBdt": { "type": "number" },
+        "note": { "type": "string", "maxLength": 400 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewedByUid": { "type": "string", "maxLength": 128 },
+        "reviewNote": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "userId",
+        "userEmail",
+        "userName",
+        "method",
+        "senderPhone",
+        "transactionId",
+        "amountBdt",
+        "note",
+        "status",
+        "reviewedByUid",
+        "reviewNote",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminRoleDoc": {
+      "title": "AdminRoleDoc",
+      "description": "Delegated training module manager record controlled solely by Super Admin.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "role": { "type": "string", "enum": ["module_manager"] },
+        "grantedByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "email",
+        "displayName",
+        "role",
+        "grantedByUid",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -366,13 +557,37 @@
       "schema": {
         "$ref": "#/entities/CustomCourseDoc"
       },
-      "description": "Dynamic training courses created or uploaded by verified platform admins."
+      "description": "Dynamic training courses or built-in overrides created or edited by Super Admin or delegated module managers."
     },
     "/materials/{materialId}": {
       "schema": {
         "$ref": "#/entities/UploadedMaterialDoc"
       },
-      "description": "Standalone training materials and uploaded handouts managed by verified platform admins."
+      "description": "Standalone training materials, video links, and uploaded handouts managed by Super Admin or delegated module managers."
+    },
+    "/siteConfig/{configId}": {
+      "schema": {
+        "$ref": "#/entities/ModuleLayoutDoc"
+      },
+      "description": "Global platform configuration (moduleLayout and accessControl) managed by Super Admin / Module Managers."
+    },
+    "/userAccess/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserAccessDoc"
+      },
+      "description": "Teacher subscription and 7-day trial entitlement record; self-creation restricted to free_trial, updates restricted to Super Admin."
+    },
+    "/paymentRequests/{requestId}": {
+      "schema": {
+        "$ref": "#/entities/PaymentRequestDoc"
+      },
+      "description": "Subscription upgrade verification requests; readable by owner and Super Admin, approval/rejection strictly by Super Admin."
+    },
+    "/admins/{adminId}": {
+      "schema": {
+        "$ref": "#/entities/AdminRoleDoc"
+      },
+      "description": "Delegated module manager records provisioned and revoked strictly by Super Admin."
     }
   }
 }

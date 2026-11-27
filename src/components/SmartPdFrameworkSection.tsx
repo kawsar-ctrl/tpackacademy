@@ -9,10 +9,16 @@ import {
   GraduationCap,
   HeartHandshake,
   Layers,
+  Lock,
   PlayCircle,
   Sparkles
 } from 'lucide-react';
-import { Course, QuizResult } from '../types/lms';
+import {
+  CertificationPathwayProgress,
+  Course,
+  PathwayStepId,
+  QuizResult
+} from '../types/lms';
 import {
   getTeacherCareerStage,
   PD_FRAMEWORK_ITEMS,
@@ -22,13 +28,18 @@ import {
   PdTierId
 } from '../data/pdFrameworkData';
 import { toBengaliDigits } from '../utils/lmsHelpers';
+import { computeCoursePathwayStatus } from '../utils/pathwayHelpers';
+import { PATHWAY_STEPS } from './CoursePathwayWorkspace';
 
 interface SmartPdFrameworkSectionProps {
   courses: Course[];
   completedLessonIds: string[];
   quizResults: Record<string, QuizResult>;
-  onOpenCourse: (courseId: string) => void;
+  pathwayProgress: CertificationPathwayProgress;
+  unlockedCourseIds?: Set<string>;
+  onOpenCourse: (courseId: string, pathwayStep?: PathwayStepId) => void;
   onOpenQuizOrCertificate: (courseId: string, passed: boolean) => void;
+  onOpenUpgradeModal?: () => void;
 }
 
 type StatusFilter = 'all' | 'pending' | 'completed';
@@ -50,44 +61,66 @@ export const SmartPdFrameworkSection: React.FC<SmartPdFrameworkSectionProps> = (
   courses,
   completedLessonIds,
   quizResults,
+  pathwayProgress,
+  unlockedCourseIds,
   onOpenCourse,
-  onOpenQuizOrCertificate
+  onOpenQuizOrCertificate,
+  onOpenUpgradeModal
 }) => {
   const [selectedPillar, setSelectedPillar] = useState<'all' | PdPillarId>('all');
   const [selectedTier, setSelectedTier] = useState<'all' | PdTierId>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
-  const courseById = useMemo(() => {
+  const { courseById, courseOrderById } = useMemo(() => {
     const map = new Map<string, Course>();
-    courses.forEach((c) => map.set(c.id, c));
-    return map;
+    const orderMap = new Map<string, number>();
+    courses.forEach((c, idx) => {
+      map.set(c.id, c);
+      orderMap.set(c.id, idx);
+    });
+    return { courseById: map, courseOrderById: orderMap };
   }, [courses]);
 
   const enrichedItems = useMemo(() => {
-    return PD_FRAMEWORK_ITEMS.map((item) => {
-      const course = courseById.get(item.courseId);
-      const totalLessons = course?.lessons.length ?? 3;
-      const completedLessons = course
-        ? course.lessons.filter((l) => completedLessonIds.includes(l.id)).length
-        : 0;
-      const quizPassed = Boolean(quizResults[item.courseId]?.passed);
-      const lessonsDone = totalLessons > 0 && completedLessons === totalLessons;
-      const isModuleMastered = lessonsDone && quizPassed;
-      const lessonPct =
-        totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
+    return PD_FRAMEWORK_ITEMS.filter((item) => courseById.has(item.courseId))
+      .sort(
+        (a, b) =>
+          (courseOrderById.get(a.courseId) ?? 9999) -
+          (courseOrderById.get(b.courseId) ?? 9999)
+      )
+      .map((item) => {
+        const course = courseById.get(item.courseId)!;
+        const totalLessons = course.lessons.length;
+        const completedLessons = course.lessons.filter((l) =>
+          completedLessonIds.includes(l.id)
+        ).length;
+        const quizPassed = Boolean(quizResults[item.courseId]?.passed);
+        const lessonsDone = totalLessons > 0 && completedLessons === totalLessons;
+        const isModuleMastered = lessonsDone && quizPassed;
+        const lessonPct =
+          totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
+        const pathwayStatus = computeCoursePathwayStatus(
+          course,
+          completedLessonIds,
+          quizResults,
+          pathwayProgress
+        );
 
-      return {
-        ...item,
-        course,
-        totalLessons,
-        completedLessons,
-        lessonPct,
-        lessonsDone,
-        quizPassed,
-        isModuleMastered
-      };
-    });
-  }, [courseById, completedLessonIds, quizResults]);
+        return {
+          ...item,
+          titleBn: course.title || item.titleBn,
+          course,
+          totalLessons,
+          completedLessons,
+          lessonPct,
+          lessonsDone,
+          quizPassed,
+          isModuleMastered,
+          pathwayCompletedSteps: pathwayStatus.completedSteps,
+          pathwayTotalSteps: pathwayStatus.totalSteps
+        };
+      });
+  }, [courseById, courseOrderById, completedLessonIds, quizResults, pathwayProgress]);
 
   const summary = useMemo(() => {
     const totalModules = enrichedItems.length;
@@ -264,6 +297,37 @@ export const SmartPdFrameworkSection: React.FC<SmartPdFrameworkSectionProps> = (
           </div>
         </div>
 
+        {/* 5-Step Smart Teacher Certification Pathway Blueprint */}
+        <div className="glass-well rounded-2xl p-4 sm:p-5 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-bold text-[#15803D] inline-flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Smart Teacher Certification Pathway · প্রতিটি মডিউলের ৫-ধাপ শিখন কাঠামো</span>
+            </div>
+            <span className="text-[11px] text-[#3F5247]">
+              Pre-Assessment → Micro Video → Interactive → Assignment → Certification
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+            {PATHWAY_STEPS.map((step) => (
+              <div
+                key={step.id}
+                className="bg-white/75 rounded-xl p-3 border border-white/85 space-y-0.5"
+              >
+                <div className="text-[11px] font-mono font-bold text-[#15803D]">
+                  ধাপ {step.numBn}
+                </div>
+                <div className="text-xs font-bold text-[#132219]">
+                  {step.shortTitle}
+                </div>
+                <div className="text-[11px] text-[#3F5247] leading-snug">
+                  {step.subtitle}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* 4 Interactive Competency Pillars */}
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -412,100 +476,144 @@ export const SmartPdFrameworkSection: React.FC<SmartPdFrameworkSectionProps> = (
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {filteredItems.map((item) => (
-              <article
-                key={item.code}
-                className={`glass-card-3d rounded-2xl p-5 flex flex-col justify-between gap-4 ${
-                  item.isModuleMastered ? 'ring-1 ring-[#15803D]/35' : ''
-                }`}
-              >
-                <div className="space-y-2.5">
-                  {/* Unboxed Typographic Metadata */}
-                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-[#3F5247]">
-                    <span className="font-mono font-bold text-[#15803D]">
-                      {item.code}
-                    </span>
-                    <span aria-hidden="true">·</span>
-                    <span>{pillarTitleMap[item.pillarId]}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{TIER_LABEL_MAP[item.tier]}</span>
-                    <span aria-hidden="true">·</span>
-                    <span className="font-mono tabular-nums">
-                      {toBengaliDigits(item.cpdHours)} CPD
-                    </span>
-                  </div>
-
-                  <div className="space-y-1">
-                    <h4 className="text-base font-bold text-[#132219] leading-snug">
-                      {item.shortTitle}
-                    </h4>
-                    <div className="text-xs font-semibold text-[#15803D]">
-                      {item.titleBn}
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-[#3F5247] leading-relaxed">
-                    {item.competencySummary}
-                  </p>
-                </div>
-
-                <div className="space-y-3 pt-2 border-t border-white/75">
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between text-xs text-[#3F5247]">
+            {filteredItems.map((item) => {
+              const isLocked = Boolean(
+                unlockedCourseIds && !unlockedCourseIds.has(item.courseId)
+              );
+              return (
+                <article
+                  key={item.code}
+                  className={`glass-card-3d rounded-2xl p-5 flex flex-col justify-between gap-4 ${
+                    item.isModuleMastered ? 'ring-1 ring-[#15803D]/35' : ''
+                  }`}
+                >
+                  <div className="space-y-2.5">
+                    {/* Unboxed Typographic Metadata */}
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs text-[#3F5247]">
+                      <span className="font-mono font-bold text-[#15803D]">
+                        {item.code}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>{pillarTitleMap[item.pillarId]}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{TIER_LABEL_MAP[item.tier]}</span>
+                      <span aria-hidden="true">·</span>
                       <span className="font-mono tabular-nums">
-                        পাঠ: {toBengaliDigits(item.completedLessons)}/
-                        {toBengaliDigits(item.totalLessons)} ({toBengaliDigits(item.lessonPct)}%)
+                        {toBengaliDigits(item.cpdHours)} CPD
                       </span>
-                      {item.quizPassed && (
-                        <span className="inline-flex items-center gap-1 font-semibold text-[#15803D]">
-                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                          <span>মূল্যায়ন উত্তীর্ণ</span>
+                      {isLocked && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="inline-flex items-center gap-0.5 font-semibold text-[#B45309]">
+                            <Lock className="w-3 h-3" />
+                            <span>প্রো মডিউল</span>
+                          </span>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      <h4 className="text-base font-bold text-[#132219] leading-snug">
+                        {item.shortTitle}
+                      </h4>
+                      <div className="text-xs font-semibold text-[#15803D]">
+                        {item.titleBn}
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-[#3F5247] leading-relaxed">
+                      {item.competencySummary}
+                    </p>
+                  </div>
+
+                  <div className="space-y-3 pt-2 border-t border-white/75">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs text-[#3F5247]">
+                        <span className="font-mono tabular-nums">
+                          পাথওয়ে: {toBengaliDigits(item.pathwayCompletedSteps)}/{toBengaliDigits(item.pathwayTotalSteps)} ধাপ · পাঠ {toBengaliDigits(item.completedLessons)}/
+                          {toBengaliDigits(item.totalLessons)}
                         </span>
-                      )}
+                        {item.quizPassed && (
+                          <span className="inline-flex items-center gap-1 font-semibold text-[#15803D]">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>সনদ উত্তীর্ণ</span>
+                          </span>
+                        )}
+                      </div>
+                      <div className="w-full h-1.5 glass-well rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-[#15803D] to-[#22C55E] transition-transform duration-300 origin-left"
+                          style={{
+                            transform: `scaleX(${Math.max(
+                              item.lessonPct / 100,
+                              item.pathwayCompletedSteps / item.pathwayTotalSteps
+                            )})`
+                          }}
+                        />
+                      </div>
                     </div>
-                    <div className="w-full h-1.5 glass-well rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-[#15803D] to-[#22C55E] transition-transform duration-300 origin-left"
-                        style={{ transform: `scaleX(${item.lessonPct / 100})` }}
-                      />
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isLocked && onOpenUpgradeModal) {
+                            onOpenUpgradeModal();
+                            return;
+                          }
+                          onOpenCourse(item.courseId);
+                        }}
+                        className={`flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl whitespace-nowrap cursor-pointer min-h-[38px] ${
+                          isLocked
+                            ? 'btn-3d-glass text-[#B45309] ring-1 ring-[#D97706]/35'
+                            : 'btn-3d-emerald'
+                        }`}
+                      >
+                        {isLocked ? (
+                          <>
+                            <Lock className="w-3.5 h-3.5 shrink-0" />
+                            <span>আনলক করুন</span>
+                          </>
+                        ) : (
+                          <>
+                            <PlayCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>
+                              {item.completedLessons > 0 ? 'চালিয়ে যান' : 'কোর্সে প্রবেশ'}
+                            </span>
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isLocked && onOpenUpgradeModal) {
+                            onOpenUpgradeModal();
+                            return;
+                          }
+                          onOpenQuizOrCertificate(item.courseId, item.quizPassed);
+                        }}
+                        className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#132219] btn-3d-glass rounded-xl whitespace-nowrap cursor-pointer min-h-[38px]"
+                      >
+                        {isLocked ? (
+                          <span>প্ল্যান</span>
+                        ) : item.quizPassed ? (
+                          <>
+                            <Award className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
+                            <span>সনদ</span>
+                          </>
+                        ) : (
+                          <>
+                            <ClipboardCheck className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
+                            <span>মূল্যায়ন</span>
+                          </>
+                        )}
+                      </button>
                     </div>
                   </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onOpenCourse(item.courseId)}
-                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold btn-3d-emerald rounded-xl whitespace-nowrap cursor-pointer min-h-[38px]"
-                    >
-                      <PlayCircle className="w-3.5 h-3.5 shrink-0" />
-                      <span>
-                        {item.completedLessons > 0 ? 'চালিয়ে যান' : 'কোর্সে প্রবেশ'}
-                      </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpenQuizOrCertificate(item.courseId, item.quizPassed)
-                      }
-                      className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#132219] btn-3d-glass rounded-xl whitespace-nowrap cursor-pointer min-h-[38px]"
-                    >
-                      {item.quizPassed ? (
-                        <>
-                          <Award className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
-                          <span>সনদ</span>
-                        </>
-                      ) : (
-                        <>
-                          <ClipboardCheck className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
-                          <span>মূল্যায়ন</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         )}
       </div>

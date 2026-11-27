@@ -18,10 +18,18 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 import {
+  AccessControlConfig,
+  AdminRoleRecord,
   CustomCourseRecord,
   LearnerProgress,
-  UploadedMaterialItem
+  ModuleLayoutConfig,
+  PaymentMethodType,
+  PaymentRequestRecord,
+  UploadedMaterialItem,
+  UserAccessRecord,
+  UserPlanTier
 } from './types/lms';
+import { sanitizeSafeMediaUrl } from './utils/accessHelpers';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -278,14 +286,19 @@ export async function updateCloudLearnerProgress(
   }
 }
 
-export const ADMIN_EMAIL = 'aayat6666@gmail.com';
+export const SUPER_ADMIN_EMAIL = 'aayat6666@gmail.com';
+export const ADMIN_EMAIL = SUPER_ADMIN_EMAIL;
 
-export function isVerifiedAdminUser(user: User | null): boolean {
+export function isSuperAdminUser(user: User | null): boolean {
   return Boolean(
     user &&
       user.emailVerified &&
-      user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()
+      user.email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()
   );
+}
+
+export function isVerifiedAdminUser(user: User | null): boolean {
+  return isSuperAdminUser(user);
 }
 
 function sanitizeId(raw: string, fallbackPrefix: string): string {
@@ -301,7 +314,7 @@ export async function saveCloudCourse(
   const courseId = sanitizeId(course.id, 'course');
   const coursePath = `courses/${courseId}`;
 
-  const baseFields = {
+  const baseFields: Record<string, unknown> = {
     title: clampString(course.title, 160) || 'নতুন প্রশিক্ষণ কোর্স',
     subtitle: clampString(course.subtitle, 240),
     category: course.category,
@@ -320,6 +333,13 @@ export async function saveCloudCourse(
     updatedAt: serverTimestamp()
   };
 
+  if (course.pathwayConfig) {
+    baseFields.pathwayConfig = course.pathwayConfig;
+  }
+  if (typeof course.orderIndex === 'number' && Number.isFinite(course.orderIndex)) {
+    baseFields.orderIndex = course.orderIndex;
+  }
+
   try {
     if (isNew) {
       await setDoc(doc(db, 'courses', courseId), {
@@ -337,6 +357,23 @@ export async function saveCloudCourse(
       isNew ? OperationType.CREATE : OperationType.UPDATE,
       coursePath
     );
+  }
+}
+
+export async function saveCloudModuleLayout(
+  uid: string,
+  layout: ModuleLayoutConfig
+): Promise<void> {
+  const layoutPath = 'siteConfig/moduleLayout';
+  try {
+    await setDoc(doc(db, 'siteConfig', 'moduleLayout'), {
+      orderedIds: clampStringList(layout.orderedIds, 150),
+      hiddenCourseIds: clampStringList(layout.hiddenCourseIds, 150),
+      updatedByUid: uid,
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, layoutPath);
   }
 }
 
@@ -392,6 +429,26 @@ export async function saveCloudMaterial(
     attachmentName: clampString(material.attachmentName, 180),
     attachmentContent: (material.attachmentContent || '').slice(0, 50000),
     attachmentMimeType: clampString(material.attachmentMimeType, 100),
+    videoSourceType:
+      material.videoSourceType === 'link' || material.videoSourceType === 'upload'
+        ? material.videoSourceType
+        : 'none',
+    videoUrl:
+      material.videoSourceType === 'link'
+        ? sanitizeSafeMediaUrl(material.videoUrl).slice(0, 1000)
+        : '',
+    videoFileName:
+      material.videoSourceType === 'upload'
+        ? clampString(material.videoFileName ?? '', 180)
+        : '',
+    videoFileSizeLabel:
+      material.videoSourceType === 'upload'
+        ? clampString(material.videoFileSizeLabel ?? '', 40)
+        : '',
+    videoMimeType:
+      material.videoSourceType === 'upload'
+        ? clampString(material.videoMimeType ?? '', 100)
+        : '',
     published: Boolean(material.published),
     updatedAt: serverTimestamp()
   };
@@ -423,5 +480,248 @@ export async function deleteCloudMaterial(materialId: string): Promise<void> {
     await deleteDoc(doc(db, 'materials', safeId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, materialPath);
+  }
+}
+
+export async function ensureInitialUserAccess(
+  user: User,
+  accessConfig: AccessControlConfig
+): Promise<void> {
+  const safeUid = sanitizeId(user.uid, 'user');
+  const accessPath = `userAccess/${safeUid}`;
+  const nowMs = Date.now();
+  const trialDays = Math.max(1, Math.min(14, accessConfig.freeTrialDays || 7));
+  const trialEndsAtMs = nowMs + trialDays * 86400000;
+  const email = (user.email ?? '').trim().slice(0, 254);
+  const displayName =
+    clampString(user.displayName ?? '', 120) || 'সম্মানিত শিক্ষক';
+
+  try {
+    await setDoc(doc(db, 'userAccess', safeUid), {
+      uid: safeUid,
+      email,
+      displayName,
+      planTier: 'free_trial',
+      trialStartedAtMs: nowMs,
+      trialEndsAtMs,
+      proActivatedAtMs: 0,
+      proExpiresAtMs: 0,
+      allowFullOverride: false,
+      customNote: '',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, accessPath);
+  }
+}
+
+export async function saveCloudAccessControl(
+  uid: string,
+  config: AccessControlConfig
+): Promise<void> {
+  const path = 'siteConfig/accessControl';
+  try {
+    await setDoc(doc(db, 'siteConfig', 'accessControl'), {
+      freeTrialDays: Math.max(1, Math.min(60, Math.round(config.freeTrialDays))),
+      freeTrialMaxModules: Math.max(
+        1,
+        Math.min(50, Math.round(config.freeTrialMaxModules))
+      ),
+      freeTrialAllowVideos: Boolean(config.freeTrialAllowVideos),
+      freeTrialAllowMaterialsDownload: Boolean(
+        config.freeTrialAllowMaterialsDownload
+      ),
+      freeTrialAllowQuiz: Boolean(config.freeTrialAllowQuiz),
+      freeTrialAllowCertificate: Boolean(config.freeTrialAllowCertificate),
+      annualPriceBdt: Math.max(
+        0,
+        Math.min(100000, Math.round(config.annualPriceBdt))
+      ),
+      annualDurationDays: Math.max(
+        30,
+        Math.min(1095, Math.round(config.annualDurationDays))
+      ),
+      paymentInstructions: clampString(config.paymentInstructions, 1000),
+      maintenanceMode: Boolean(config.maintenanceMode),
+      updatedByUid: uid,
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function adminUpdateUserAccess(
+  targetUserId: string,
+  patch: {
+    displayName?: string;
+    planTier: UserPlanTier;
+    trialStartedAtMs: number;
+    trialEndsAtMs: number;
+    proActivatedAtMs: number;
+    proExpiresAtMs: number;
+    allowFullOverride: boolean;
+    customNote: string;
+  }
+): Promise<void> {
+  const safeUid = sanitizeId(targetUserId, 'user');
+  const path = `userAccess/${safeUid}`;
+  const updateFields: Record<string, unknown> = {
+    planTier: patch.planTier,
+    trialStartedAtMs: Math.max(0, Math.round(patch.trialStartedAtMs)),
+    trialEndsAtMs: Math.max(0, Math.round(patch.trialEndsAtMs)),
+    proActivatedAtMs: Math.max(0, Math.round(patch.proActivatedAtMs)),
+    proExpiresAtMs: Math.max(0, Math.round(patch.proExpiresAtMs)),
+    allowFullOverride: Boolean(patch.allowFullOverride),
+    customNote: clampString(patch.customNote, 500),
+    updatedAt: serverTimestamp()
+  };
+  if (patch.displayName && patch.displayName.trim()) {
+    updateFields.displayName = clampString(patch.displayName, 120);
+  }
+  try {
+    await updateDoc(doc(db, 'userAccess', safeUid), updateFields);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function submitPaymentRequest(
+  user: User,
+  payload: {
+    userName: string;
+    method: PaymentMethodType;
+    senderPhone: string;
+    transactionId: string;
+    amountBdt: number;
+    note: string;
+  }
+): Promise<void> {
+  const reqId = sanitizeId(
+    `pay-${user.uid.slice(0, 8)}-${Date.now().toString(36)}`,
+    'pay'
+  );
+  const path = `paymentRequests/${reqId}`;
+  const email = (user.email ?? '').trim().slice(0, 254);
+
+  try {
+    await setDoc(doc(db, 'paymentRequests', reqId), {
+      id: reqId,
+      userId: user.uid,
+      userEmail: email,
+      userName:
+        clampString(payload.userName, 120) ||
+        clampString(user.displayName ?? '', 120) ||
+        'সম্মানিত শিক্ষক',
+      method: payload.method,
+      senderPhone: clampString(payload.senderPhone, 30),
+      transactionId: clampString(payload.transactionId, 80),
+      amountBdt: Math.max(1, Math.min(100000, Math.round(payload.amountBdt))),
+      note: clampString(payload.note, 400),
+      status: 'pending',
+      reviewedByUid: '',
+      reviewNote: '',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function reviewPaymentRequestAndGrantPro(
+  adminUid: string,
+  req: PaymentRequestRecord,
+  approve: boolean,
+  durationDays: number,
+  reviewNote: string,
+  existingUserAccess?: UserAccessRecord
+): Promise<void> {
+  const safeReqId = sanitizeId(req.id, 'pay');
+  const safeUserId = sanitizeId(req.userId, 'user');
+  const nowMs = Date.now();
+  const proExpiresAtMs =
+    nowMs + Math.max(30, Math.min(1095, durationDays)) * 86400000;
+
+  try {
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'paymentRequests', safeReqId), {
+      status: approve ? 'approved' : 'rejected',
+      reviewedByUid: adminUid,
+      reviewNote: clampString(reviewNote, 400),
+      updatedAt: serverTimestamp()
+    });
+
+    if (approve) {
+      const accessRef = doc(db, 'userAccess', safeUserId);
+      if (existingUserAccess) {
+        batch.update(accessRef, {
+          planTier: 'annual_pro',
+          proActivatedAtMs: nowMs,
+          proExpiresAtMs,
+          allowFullOverride: false,
+          customNote: `৳${req.amountBdt} (${req.method} TrxID: ${req.transactionId}) অনুমোদিত`,
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        batch.set(accessRef, {
+          uid: safeUserId,
+          email: clampString(req.userEmail, 254),
+          displayName: clampString(req.userName, 120) || 'সম্মানিত শিক্ষক',
+          planTier: 'annual_pro',
+          trialStartedAtMs: nowMs,
+          trialEndsAtMs: nowMs + 7 * 86400000,
+          proActivatedAtMs: nowMs,
+          proExpiresAtMs,
+          allowFullOverride: false,
+          customNote: `৳${req.amountBdt} (${req.method} TrxID: ${req.transactionId}) অনুমোদিত`,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
+    }
+
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.WRITE,
+      `paymentRequests/${safeReqId}`
+    );
+  }
+}
+
+export async function grantModuleManagerRole(
+  adminUid: string,
+  target: { uid: string; email: string; displayName: string }
+): Promise<void> {
+  const safeUid = sanitizeId(target.uid, 'admin');
+  const path = `admins/${safeUid}`;
+  const payload: AdminRoleRecord = {
+    uid: safeUid,
+    email: clampString(target.email, 254),
+    displayName: clampString(target.displayName, 120) || 'মডিউল ম্যানেজার',
+    role: 'module_manager',
+    grantedByUid: adminUid
+  };
+  try {
+    await setDoc(doc(db, 'admins', safeUid), {
+      ...payload,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function revokeModuleManagerRole(targetUid: string): Promise<void> {
+  const safeUid = sanitizeId(targetUid, 'admin');
+  const path = `admins/${safeUid}`;
+  try {
+    await deleteDoc(doc(db, 'admins', safeUid));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }

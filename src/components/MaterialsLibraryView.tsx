@@ -1,11 +1,15 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   BookOpen,
   CheckCircle2,
+  Crown,
   Download,
   ExternalLink,
   FileText,
-  Search
+  Film,
+  Lock,
+  Search,
+  Video
 } from 'lucide-react';
 import {
   Course,
@@ -15,13 +19,18 @@ import {
   UploadedMaterialItem
 } from '../types/lms';
 import { downloadMaterialHandout, toBengaliDigits } from '../utils/lmsHelpers';
+import { parseVideoSource } from '../utils/accessHelpers';
+import { getMaterialVideoBlob } from '../utils/videoStorage';
 
 interface MaterialsLibraryViewProps {
   courses: Course[];
   uploadedMaterials?: UploadedMaterialItem[];
   readMaterialIds: string[];
+  canPlayVideos: boolean;
+  canDownloadMaterials: boolean;
   onMarkMaterialRead: (materialId: string) => void;
   onOpenLessonInClassroom: (courseId: string, lessonId: string) => void;
+  onOpenUpgradeModal: () => void;
 }
 
 interface UnifiedMaterialEntry {
@@ -45,6 +54,10 @@ interface UnifiedMaterialEntry {
   attachmentName?: string;
   attachmentContent?: string;
   attachmentMimeType?: string;
+  videoSourceType?: 'none' | 'link' | 'upload';
+  videoUrl?: string;
+  videoFileName?: string;
+  videoFileSizeLabel?: string;
 }
 
 function downloadUploadedMaterialFile(entry: UnifiedMaterialEntry): void {
@@ -121,14 +134,19 @@ export const MaterialsLibraryView: React.FC<MaterialsLibraryViewProps> = ({
   courses,
   uploadedMaterials = [],
   readMaterialIds,
+  canPlayVideos,
+  canDownloadMaterials,
   onMarkMaterialRead,
-  onOpenLessonInClassroom
+  onOpenLessonInClassroom,
+  onOpenUpgradeModal
 }) => {
   const [categoryFilter, setCategoryFilter] = useState<CourseCategory>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>(
     courses[0]?.lessons[0]?.material.id ?? uploadedMaterials[0]?.id ?? ''
   );
+  const [uploadedVideoObjectUrl, setUploadedVideoObjectUrl] =
+    useState<string>('');
 
   const allMaterials: UnifiedMaterialEntry[] = useMemo(() => {
     const lessonEntries: UnifiedMaterialEntry[] = courses.flatMap((course) =>
@@ -171,7 +189,11 @@ export const MaterialsLibraryView: React.FC<MaterialsLibraryViewProps> = ({
         actionChecklist: mat.actionChecklist,
         attachmentName: mat.attachmentName,
         attachmentContent: mat.attachmentContent,
-        attachmentMimeType: mat.attachmentMimeType
+        attachmentMimeType: mat.attachmentMimeType,
+        videoSourceType: mat.videoSourceType ?? 'none',
+        videoUrl: mat.videoUrl ?? '',
+        videoFileName: mat.videoFileName ?? '',
+        videoFileSizeLabel: mat.videoFileSizeLabel ?? ''
       })
     );
 
@@ -197,6 +219,31 @@ export const MaterialsLibraryView: React.FC<MaterialsLibraryViewProps> = ({
     filteredMaterials.find((entry) => entry.id === selectedMaterialId) ??
     filteredMaterials[0] ??
     allMaterials[0];
+
+  useEffect(() => {
+    let activeUrl = '';
+    let cancelled = false;
+    setUploadedVideoObjectUrl('');
+
+    if (
+      activeEntry &&
+      activeEntry.videoSourceType === 'upload' &&
+      canPlayVideos
+    ) {
+      void getMaterialVideoBlob(activeEntry.id).then((blob) => {
+        if (cancelled || !blob) return;
+        activeUrl = URL.createObjectURL(blob);
+        setUploadedVideoObjectUrl(activeUrl);
+      });
+    }
+
+    return () => {
+      cancelled = true;
+      if (activeUrl) {
+        URL.revokeObjectURL(activeUrl);
+      }
+    };
+  }, [activeEntry?.id, activeEntry?.videoSourceType, canPlayVideos]);
 
   const readCount = allMaterials.filter((e) =>
     readMaterialIds.includes(e.id)
@@ -322,6 +369,15 @@ export const MaterialsLibraryView: React.FC<MaterialsLibraryViewProps> = ({
                           </span>
                         </>
                       )}
+                      {entry.videoSourceType && entry.videoSourceType !== 'none' && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="inline-flex items-center gap-0.5 text-[#15803D] font-medium">
+                            <Video className="w-3 h-3" />
+                            <span>ভিডিও</span>
+                          </span>
+                        </>
+                      )}
                     </div>
                     <div
                       className={`text-sm leading-snug ${
@@ -362,6 +418,86 @@ export const MaterialsLibraryView: React.FC<MaterialsLibraryViewProps> = ({
                 {activeEntry.title}
               </h2>
             </div>
+
+            {activeEntry.videoSourceType &&
+              activeEntry.videoSourceType !== 'none' && (
+                <div className="rounded-2xl glass-well p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-[#132219]">
+                    <span className="inline-flex items-center gap-1.5 text-[#15803D]">
+                      <Film className="w-4 h-4" />
+                      <span>
+                        {activeEntry.videoSourceType === 'link'
+                          ? 'সংযুক্ত প্রশিক্ষণ ভিডিও (লিংক)'
+                          : `আপলোডকৃত ভিডিও: ${activeEntry.videoFileName || 'video.mp4'}`}
+                      </span>
+                    </span>
+                    {activeEntry.videoFileSizeLabel && (
+                      <span className="font-mono text-[#3F5247]">
+                        {activeEntry.videoFileSizeLabel}
+                      </span>
+                    )}
+                  </div>
+
+                  {!canPlayVideos ? (
+                    <div className="p-6 rounded-xl bg-white/75 border border-white text-center space-y-3">
+                      <Lock className="w-6 h-6 text-[#15803D] mx-auto" />
+                      <div className="text-sm font-bold text-[#132219]">
+                        ভিডিও উপকরণ দেখতে বার্ষিক প্রো প্ল্যান প্রয়োজন
+                      </div>
+                      <button
+                        type="button"
+                        onClick={onOpenUpgradeModal}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold btn-3d-emerald rounded-xl cursor-pointer"
+                      >
+                        <Crown className="w-3.5 h-3.5" />
+                        <span>১,০০০ টাকায় ১ বছরের ফুল এক্সেস নিন</span>
+                      </button>
+                    </div>
+                  ) : activeEntry.videoSourceType === 'link' ? (
+                    (() => {
+                      const parsed = parseVideoSource(activeEntry.videoUrl);
+                      if (parsed.kind === 'invalid') {
+                        return (
+                          <div className="text-xs text-[#B91C1C]">
+                            ভিডিও লিংকটি লোড করা যায়নি।
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="aspect-video w-full rounded-xl overflow-hidden bg-black/90 border border-white/80">
+                          {parsed.kind === 'direct' ? (
+                            <video
+                              src={parsed.embedOrSrcUrl}
+                              controls
+                              className="w-full h-full object-contain"
+                            />
+                          ) : (
+                            <iframe
+                              src={parsed.embedOrSrcUrl}
+                              title={activeEntry.title}
+                              className="w-full h-full"
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                              allowFullScreen
+                            />
+                          )}
+                        </div>
+                      );
+                    })()
+                  ) : uploadedVideoObjectUrl ? (
+                    <div className="aspect-video w-full rounded-xl overflow-hidden bg-black/90 border border-white/80">
+                      <video
+                        src={uploadedVideoObjectUrl}
+                        controls
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  ) : (
+                    <div className="p-5 rounded-xl bg-white/70 text-xs text-[#3F5247] text-center">
+                      এই ডিভাইসের লোকাল ভিডিও ফাইলটি পাওয়া যায়নি (অন্য ব্রাউজারে আপলোড করা হয়ে থাকলে অ্যাডমিন থেকে পুনরায় আপলোড বা ভিডিও লিংক যুক্ত করুন)।
+                    </div>
+                  )}
+                </div>
+              )}
 
             <p className="text-[15px] leading-relaxed text-[#2C3E33]">
               {activeEntry.summary}
@@ -452,13 +588,25 @@ export const MaterialsLibraryView: React.FC<MaterialsLibraryViewProps> = ({
                   <button
                     type="button"
                     onClick={() => {
+                      if (!canDownloadMaterials) {
+                        onOpenUpgradeModal();
+                        return;
+                      }
                       downloadRawAttachment(activeEntry);
                       onMarkMaterialRead(activeEntry.id);
                     }}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#15803D] btn-3d-glass rounded-lg cursor-pointer"
                   >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>মূল ফাইল ডাউনলোড</span>
+                    {canDownloadMaterials ? (
+                      <Download className="w-3.5 h-3.5" />
+                    ) : (
+                      <Lock className="w-3.5 h-3.5" />
+                    )}
+                    <span>
+                      {canDownloadMaterials
+                        ? 'মূল ফাইল ডাউনলোড'
+                        : 'মূল ফাইল (প্রো)'}
+                    </span>
                   </button>
                 </div>
                 <pre className="max-h-60 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-[#2C3E33] glass-input rounded-xl p-3 font-sans">
@@ -473,6 +621,10 @@ export const MaterialsLibraryView: React.FC<MaterialsLibraryViewProps> = ({
                 <button
                   type="button"
                   onClick={() => {
+                    if (!canDownloadMaterials) {
+                      onOpenUpgradeModal();
+                      return;
+                    }
                     if (activeEntry.lessonRef) {
                       downloadMaterialHandout(
                         activeEntry.courseTitle,
@@ -485,8 +637,16 @@ export const MaterialsLibraryView: React.FC<MaterialsLibraryViewProps> = ({
                   }}
                   className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 min-h-[44px] cursor-pointer"
                 >
-                  <Download className="w-4 h-4" />
-                  <span>হ্যান্ডআউট ডাউনলোড (.TXT)</span>
+                  {canDownloadMaterials ? (
+                    <Download className="w-4 h-4" />
+                  ) : (
+                    <Lock className="w-4 h-4" />
+                  )}
+                  <span>
+                    {canDownloadMaterials
+                      ? 'হ্যান্ডআউট ডাউনলোড (.TXT)'
+                      : 'হ্যান্ডআউট ডাউনলোড (প্রো আনলক)'}
+                  </span>
                 </button>
 
                 <button

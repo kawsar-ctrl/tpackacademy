@@ -1,21 +1,30 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
+  ArrowRight,
   Award,
   BookOpen,
   CheckCircle2,
   ClipboardCheck,
+  Crown,
   Download,
   FileText,
+  Lock,
   NotebookPen,
   PlayCircle
 } from 'lucide-react';
 import {
+  CertificationPathwayProgress,
   Course,
   DiscussionPost,
   DiscussionPostType,
   DiscussionReply,
+  EvaluatedAchievement,
+  InteractiveLearningResult,
   LessonNote,
+  PathwayStepId,
+  PracticalAssignmentSubmission,
+  PreAssessmentResult,
   QuizResult,
   VoiceReflectionMeta
 } from '../types/lms';
@@ -23,10 +32,18 @@ import { InteractiveVideoPlayer } from './InteractiveVideoPlayer';
 import { PersonalNotebookPanel } from './PersonalNotebookPanel';
 import { LessonDiscussionForum } from './LessonDiscussionForum';
 import {
+  CertificationStepView,
+  InteractiveLearningStepView,
+  PathwayStepperHeader,
+  PracticalAssignmentStepView,
+  PreAssessmentStepView
+} from './CoursePathwayWorkspace';
+import {
   downloadMaterialHandout,
   hasLessonNoteContent,
   toBengaliDigits
 } from '../utils/lmsHelpers';
+import { computeCoursePathwayStatus } from '../utils/pathwayHelpers';
 
 interface ClassroomViewProps {
   course: Course;
@@ -41,6 +58,16 @@ interface ClassroomViewProps {
   customDiscussionReplies: Record<string, DiscussionReply[]>;
   helpfulDiscussionIds: string[];
   quizResult?: QuizResult;
+  pathwayProgress: CertificationPathwayProgress;
+  achievements: EvaluatedAchievement[];
+  initialPathwayStep?: PathwayStepId;
+  canPlayVideos?: boolean;
+  canDownloadMaterials?: boolean;
+  canTakeQuiz?: boolean;
+  canGetCertificate?: boolean;
+  onSavePreAssessment: (result: PreAssessmentResult) => void;
+  onUpdateInteractive: (result: InteractiveLearningResult) => void;
+  onSubmitAssignment: (submission: PracticalAssignmentSubmission) => void;
   onSelectLesson: (lessonId: string) => void;
   onToggleLessonComplete: (lessonId: string) => void;
   onMarkMaterialRead: (materialId: string) => void;
@@ -64,6 +91,7 @@ interface ClassroomViewProps {
   onBackToCatalog: () => void;
   onGoToQuiz: () => void;
   onGoToCertificate: () => void;
+  onOpenUpgradeModal?: () => void;
 }
 
 export const ClassroomView: React.FC<ClassroomViewProps> = ({
@@ -79,6 +107,16 @@ export const ClassroomView: React.FC<ClassroomViewProps> = ({
   customDiscussionReplies,
   helpfulDiscussionIds,
   quizResult,
+  pathwayProgress,
+  achievements,
+  initialPathwayStep,
+  canPlayVideos = true,
+  canDownloadMaterials = true,
+  canTakeQuiz = true,
+  canGetCertificate = true,
+  onSavePreAssessment,
+  onUpdateInteractive,
+  onSubmitAssignment,
   onSelectLesson,
   onToggleLessonComplete,
   onMarkMaterialRead,
@@ -91,10 +129,39 @@ export const ClassroomView: React.FC<ClassroomViewProps> = ({
   onStudySecondsTick,
   onBackToCatalog,
   onGoToQuiz,
-  onGoToCertificate
+  onGoToCertificate,
+  onOpenUpgradeModal
 }) => {
   const [contentTab, setContentTab] = useState<'overview' | 'checklist' | 'notebook'>('overview');
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
+  const [activeStep, setActiveStep] = useState<PathwayStepId>(() => {
+    if (initialPathwayStep) return initialPathwayStep;
+    return pathwayProgress.preAssessments[course.id]
+      ? 'video-lessons'
+      : 'pre-assessment';
+  });
+
+  useEffect(() => {
+    if (initialPathwayStep) {
+      setActiveStep(initialPathwayStep);
+      return;
+    }
+    setActiveStep(
+      pathwayProgress.preAssessments[course.id]
+        ? 'video-lessons'
+        : 'pre-assessment'
+    );
+  }, [course.id, initialPathwayStep]);
+
+  const pathwayStatus = useMemo(() => {
+    const quizMap = quizResult ? { [course.id]: quizResult } : {};
+    return computeCoursePathwayStatus(
+      course,
+      completedLessonIds,
+      quizMap,
+      pathwayProgress
+    );
+  }, [course, completedLessonIds, quizResult, pathwayProgress]);
 
   const activeLesson =
     course.lessons.find((l) => l.id === activeLessonId) ?? course.lessons[0];
@@ -102,12 +169,17 @@ export const ClassroomView: React.FC<ClassroomViewProps> = ({
   const completedInCourse = course.lessons.filter((l) =>
     completedLessonIds.includes(l.id)
   ).length;
-  const progressPercent = Math.round(
-    (completedInCourse / course.lessons.length) * 100
-  );
+  const progressPercent =
+    course.lessons.length > 0
+      ? Math.round((completedInCourse / course.lessons.length) * 100)
+      : 0;
 
-  const isLessonDone = completedLessonIds.includes(activeLesson.id);
-  const isMaterialRead = readMaterialIds.includes(activeLesson.material.id);
+  const isLessonDone = activeLesson
+    ? completedLessonIds.includes(activeLesson.id)
+    : false;
+  const isMaterialRead = activeLesson
+    ? readMaterialIds.includes(activeLesson.material.id)
+    : false;
 
   const toggleCheck = (key: string) => {
     setCheckedItems((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -144,79 +216,231 @@ export const ClassroomView: React.FC<ClassroomViewProps> = ({
           {quizResult?.passed ? (
             <button
               type="button"
-              onClick={onGoToCertificate}
+              onClick={() => {
+                if (!canGetCertificate && onOpenUpgradeModal) {
+                  onOpenUpgradeModal();
+                  return;
+                }
+                onGoToCertificate();
+              }}
               className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 min-h-[42px] cursor-pointer"
             >
-              <Award className="w-4 h-4" />
+              {canGetCertificate ? (
+                <Award className="w-4 h-4" />
+              ) : (
+                <Lock className="w-4 h-4" />
+              )}
               <span>সার্টিফিকেট দেখুন</span>
             </button>
           ) : (
             <button
               type="button"
-              onClick={onGoToQuiz}
+              onClick={() => {
+                if (!canTakeQuiz && onOpenUpgradeModal) {
+                  onOpenUpgradeModal();
+                  return;
+                }
+                onGoToQuiz();
+              }}
               className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 min-h-[42px] cursor-pointer"
             >
-              <ClipboardCheck className="w-4 h-4" />
+              {canTakeQuiz ? (
+                <ClipboardCheck className="w-4 h-4" />
+              ) : (
+                <Lock className="w-4 h-4" />
+              )}
               <span>কোর্স কুইজ দিন</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* Main 2-Zone Workspace: 70% Stage / 30% Curriculum */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        {/* Left Zone: Video Stage + Training Materials */}
-        <div className="lg:col-span-8 space-y-6">
-          <InteractiveVideoPlayer
-            lesson={activeLesson}
-            isCompleted={isLessonDone}
-            onToggleComplete={() => onToggleLessonComplete(activeLesson.id)}
-            onStudySecondsTick={onStudySecondsTick}
-          />
+      {/* 5-Step Smart Teacher Certification Pathway Stepper */}
+      <PathwayStepperHeader
+        activeStep={activeStep}
+        status={pathwayStatus}
+        onSelectStep={setActiveStep}
+      />
 
-          {/* Structured Training Material Card */}
-          <div className="glass-surface rounded-2xl p-6 space-y-5">
-            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-4 border-b border-white/75">
-            <div className="space-y-1">
-              <div className="text-xs font-medium text-[#3F5247] flex items-center gap-2">
-                <span>{activeLesson.number}</span>
-                <span aria-hidden="true">·</span>
-                <span>{activeLesson.material.formatLabel}</span>
-                <span aria-hidden="true">·</span>
-                <span>{activeLesson.material.readTime}</span>
+      {activeStep === 'pre-assessment' && (
+        <PreAssessmentStepView
+          course={course}
+          savedResult={pathwayProgress.preAssessments[course.id]}
+          onSavePreAssessment={onSavePreAssessment}
+          onNextStep={() => setActiveStep('video-lessons')}
+        />
+      )}
+
+      {activeStep === 'interactive-learning' && (
+        <InteractiveLearningStepView
+          course={course}
+          savedInteractive={pathwayProgress.interactiveResults[course.id]}
+          onUpdateInteractive={onUpdateInteractive}
+          onNextStep={() => setActiveStep('practical-assignment')}
+        />
+      )}
+
+      {activeStep === 'practical-assignment' && (
+        <PracticalAssignmentStepView
+          course={course}
+          teacherName={teacherName}
+          savedSubmission={pathwayProgress.assignments[course.id]}
+          onSubmitAssignment={onSubmitAssignment}
+          onNextStep={() => setActiveStep('certification')}
+        />
+      )}
+
+      {activeStep === 'certification' && (
+        <CertificationStepView
+          course={course}
+          status={pathwayStatus}
+          pathwayProgress={pathwayProgress}
+          quizResult={quizResult}
+          achievements={achievements}
+          onSelectStep={setActiveStep}
+          onGoToQuiz={() => {
+            if (!canTakeQuiz && onOpenUpgradeModal) {
+              onOpenUpgradeModal();
+              return;
+            }
+            onGoToQuiz();
+          }}
+          onGoToCertificate={() => {
+            if (!canGetCertificate && onOpenUpgradeModal) {
+              onOpenUpgradeModal();
+              return;
+            }
+            onGoToCertificate();
+          }}
+        />
+      )}
+
+      {activeStep === 'video-lessons' && !activeLesson && (
+        <div className="glass-surface rounded-2xl p-8 text-center space-y-4">
+          <div className="text-xs font-semibold text-[#15803D]">
+            ধাপ ০২ · Video Lessons (১–৫ মিনিটের Micro Learning ভিডিও)
+          </div>
+          <p className="text-sm text-[#3F5247]">
+            এই কাস্টম কোর্সে এখনো কোনো ভিডিও লেসন যুক্ত করা হয়নি। আপনি পরবর্তী ধাপে গিয়ে ইন্টারঅ্যাক্টিভ কার্যক্রম ও অ্যাসাইনমেন্ট সম্পন্ন করতে পারেন।
+          </p>
+          <button
+            type="button"
+            onClick={() => setActiveStep('interactive-learning')}
+            className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold btn-3d-emerald rounded-xl cursor-pointer"
+          >
+            <span>ধাপ ০৩: Interactive Learning-এ যান</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Main 2-Zone Workspace (Step 2: Micro Learning Video Lessons) */}
+      {activeStep === 'video-lessons' && activeLesson && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          {/* Left Zone: Video Stage + Training Materials */}
+          <div className="lg:col-span-8 space-y-6">
+            <div className="glass-surface rounded-2xl px-5 py-3.5 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-xs font-semibold text-[#15803D]">
+                ধাপ ০২ · Video Lessons — ১–৫ মিনিটের Micro Learning ভিডিও ও পাঠ উপকরণ
               </div>
-              <h2 className="text-xl font-bold text-[#132219]">
-                {activeLesson.material.title}
-              </h2>
+              <button
+                type="button"
+                onClick={() => setActiveStep('interactive-learning')}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#132219] hover:text-[#15803D] transition-colors cursor-pointer"
+              >
+                <span>পরবর্তী: ধাপ ০৩ (Interactive Learning)</span>
+                <ArrowRight className="w-3.5 h-3.5 text-[#15803D]" />
+              </button>
             </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => onMarkMaterialRead(activeLesson.material.id)}
-                  className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 min-h-[40px] cursor-pointer ${
-                    isMaterialRead
-                      ? 'btn-3d-glass ring-1 ring-[#15803D]/50 text-[#15803D]'
-                      : 'btn-3d-glass text-[#3F5247] hover:text-[#132219]'
-                  }`}
-                >
-                  <BookOpen className="w-3.5 h-3.5" />
-                  <span>{isMaterialRead ? 'পঠিত' : 'পঠিত চিহ্নিত করুন'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    downloadMaterialHandout(course.title, activeLesson);
-                    onMarkMaterialRead(activeLesson.material.id);
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#132219] btn-3d-glass rounded-xl whitespace-nowrap shrink-0 min-h-[40px] cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 text-[#15803D]" />
-                  <span>লেসন প্ল্যান ডাউনলোড</span>
-                </button>
+            {canPlayVideos ? (
+              <InteractiveVideoPlayer
+                lesson={activeLesson}
+                isCompleted={isLessonDone}
+                onToggleComplete={() => onToggleLessonComplete(activeLesson.id)}
+                onStudySecondsTick={onStudySecondsTick}
+              />
+            ) : (
+              <div className="glass-surface rounded-2xl p-8 text-center space-y-4">
+                <div className="glass-3d-icon-well w-12 h-12 rounded-2xl flex items-center justify-center mx-auto text-[#B45309]">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <div className="space-y-1.5 max-w-md mx-auto">
+                  <h3 className="text-lg font-bold text-[#132219]">
+                    ভিডিও প্লেয়ার বর্তমানে সীমাবদ্ধ
+                  </h3>
+                  <p className="text-xs sm:text-sm text-[#3F5247]">
+                    আপনার বর্তমান লিমিটেড প্ল্যানে ভিডিও পাঠ প্রদর্শন বন্ধ আছে। ১ বছরের ফুল এক্সেস নিলে সব Micro Learning ভিডিও চালু হবে।
+                  </p>
+                </div>
+                {onOpenUpgradeModal && (
+                  <button
+                    type="button"
+                    onClick={onOpenUpgradeModal}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold btn-3d-emerald rounded-xl cursor-pointer"
+                  >
+                    <Crown className="w-4 h-4" />
+                    <span>১,০০০ টাকায় ফুল এক্সেস নিন</span>
+                  </button>
+                )}
               </div>
-            </div>
+            )}
+
+            {/* Structured Training Material Card */}
+            <div className="glass-surface rounded-2xl p-6 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-4 border-b border-white/75">
+                <div className="space-y-1">
+                  <div className="text-xs font-medium text-[#3F5247] flex items-center gap-2">
+                    <span>{activeLesson.number}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{activeLesson.material.formatLabel}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{activeLesson.material.readTime}</span>
+                  </div>
+                  <h2 className="text-xl font-bold text-[#132219]">
+                    {activeLesson.material.title}
+                  </h2>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onMarkMaterialRead(activeLesson.material.id)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 min-h-[40px] cursor-pointer ${
+                      isMaterialRead
+                        ? 'btn-3d-glass ring-1 ring-[#15803D]/50 text-[#15803D]'
+                        : 'btn-3d-glass text-[#3F5247] hover:text-[#132219]'
+                    }`}
+                  >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>{isMaterialRead ? 'পঠিত' : 'পঠিত চিহ্নিত করুন'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!canDownloadMaterials && onOpenUpgradeModal) {
+                        onOpenUpgradeModal();
+                        return;
+                      }
+                      downloadMaterialHandout(course.title, activeLesson);
+                      onMarkMaterialRead(activeLesson.material.id);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#132219] btn-3d-glass rounded-xl whitespace-nowrap shrink-0 min-h-[40px] cursor-pointer"
+                  >
+                    {canDownloadMaterials ? (
+                      <Download className="w-3.5 h-3.5 text-[#15803D]" />
+                    ) : (
+                      <Lock className="w-3.5 h-3.5 text-[#B45309]" />
+                    )}
+                    <span>
+                      {canDownloadMaterials
+                        ? 'লেসন প্ল্যান ডাউনলোড'
+                        : 'ডাউনলোড (প্রো)'}
+                    </span>
+                  </button>
+                </div>
+              </div>
 
             {/* Segmented Switcher for Notes vs Action Checklist vs Personal Notebook */}
             <div className="inline-flex flex-wrap items-center gap-1 p-1.5 glass-well rounded-xl">
@@ -478,31 +702,51 @@ export const ClassroomView: React.FC<ClassroomViewProps> = ({
               })}
             </div>
 
-            {/* Quiz & Certificate Box */}
+            {/* Next Pathway Step & Quiz Box */}
             <div className="pt-4 border-t border-white/75 space-y-3">
               <div className="flex items-start gap-2.5 text-xs text-[#3F5247]">
                 <FileText className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
                 <span>
-                  কোর্স শেষে ৫ প্রশ্নের কুইজে ৬০% নম্বর পেলেই তাৎক্ষণিক ডিজিটাল সার্টিফিকেট ডাউনলোড করতে পারবেন।
+                  ভিডিও লেসন শেষে ধাপ ০৩ (Interactive Learning), ধাপ ০৪ (Assignment) এবং ধাপ ০৫ (Post-Assessment)-এ ৬০% নম্বর পেলেই CPD সনদ আনলক হবে।
                 </span>
               </div>
 
               <button
                 type="button"
-                onClick={onGoToQuiz}
+                onClick={() => setActiveStep('interactive-learning')}
                 className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold btn-3d-emerald rounded-xl min-h-[44px] cursor-pointer"
               >
-                <ClipboardCheck className="w-4 h-4" />
+                <span>ধাপ ০৩: Interactive Learning-এ যান</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (!canTakeQuiz && onOpenUpgradeModal) {
+                    onOpenUpgradeModal();
+                    return;
+                  }
+                  onGoToQuiz();
+                }}
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold text-[#132219] btn-3d-glass rounded-xl min-h-[40px] cursor-pointer"
+              >
+                {canTakeQuiz ? (
+                  <ClipboardCheck className="w-4 h-4 text-[#15803D]" />
+                ) : (
+                  <Lock className="w-4 h-4 text-[#B45309]" />
+                )}
                 <span>
                   {quizResult
-                    ? `পুনরায় কুইজ দিন (সেরা: ${toBengaliDigits(quizResult.percentage)}%)`
-                    : 'মূল্যায়ন কুইজ শুরু করুন'}
+                    ? `পুনরায় Post-Assessment দিন (সেরা: ${toBengaliDigits(quizResult.percentage)}%)`
+                    : 'সরাসরি Post-Assessment কুইজ'}
                 </span>
               </button>
             </div>
           </div>
         </aside>
-      </div>
+        </div>
+      )}
     </section>
   );
 };

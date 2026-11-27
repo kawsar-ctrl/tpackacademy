@@ -8,12 +8,14 @@ import {
   LayoutGrid,
   Layers,
   Leaf,
+  Lock,
   Pause,
   Play,
   PlayCircle,
   Search
 } from 'lucide-react';
 import {
+  CertificationPathwayProgress,
   Course,
   CourseCategory,
   CustomCourseRecord,
@@ -22,6 +24,7 @@ import {
 import { EcoImage } from './EcoImage';
 import { GlassTiltCard } from './GlassTiltCard';
 import { toBengaliDigits } from '../utils/lmsHelpers';
+import { computeCoursePathwayStatus } from '../utils/pathwayHelpers';
 
 interface CourseCarouselSectionProps {
   courses: Course[];
@@ -31,8 +34,11 @@ interface CourseCarouselSectionProps {
   onSearchChange: (query: string) => void;
   completedLessonIds: string[];
   quizResults: Record<string, QuizResult>;
+  pathwayProgress: CertificationPathwayProgress;
+  unlockedCourseIds?: Set<string>;
   onOpenCourse: (courseId: string) => void;
   onOpenQuizOrCertificate: (courseId: string, passed: boolean) => void;
+  onOpenUpgradeModal?: () => void;
   onResetFilters: () => void;
 }
 
@@ -67,8 +73,11 @@ export const CourseCarouselSection: React.FC<CourseCarouselSectionProps> = ({
   onSearchChange,
   completedLessonIds,
   quizResults,
+  pathwayProgress,
+  unlockedCourseIds,
   onOpenCourse,
   onOpenQuizOrCertificate,
+  onOpenUpgradeModal,
   onResetFilters
 }) => {
   const [activeIndex, setActiveIndex] = useState(0);
@@ -240,6 +249,12 @@ export const CourseCarouselSection: React.FC<CourseCarouselSectionProps> = ({
     const completedCount = course.lessons.filter((l) =>
       completedLessonIds.includes(l.id)
     ).length;
+    const pathwayStatus = computeCoursePathwayStatus(
+      course,
+      completedLessonIds,
+      quizResults,
+      pathwayProgress
+    );
     const pct =
       course.lessons.length > 0
         ? Math.round((completedCount / course.lessons.length) * 100)
@@ -247,6 +262,9 @@ export const CourseCarouselSection: React.FC<CourseCarouselSectionProps> = ({
     const quizRes = quizResults[course.id];
     const isDraft =
       'published' in course && !(course as CustomCourseRecord).published;
+    const isLocked = Boolean(
+      unlockedCourseIds && !unlockedCourseIds.has(course.id)
+    );
 
     const cardContent = (
       <article className="flex flex-col justify-between h-full">
@@ -256,12 +274,24 @@ export const CourseCarouselSection: React.FC<CourseCarouselSectionProps> = ({
               src={course.imagePath}
               alt={course.title}
               fallbackLabel={course.title}
-              className="w-full h-full object-cover block"
+              className={`w-full h-full object-cover block ${
+                isLocked ? 'opacity-75 grayscale-[25%]' : ''
+              }`}
             />
             <div
               className="absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-[#132219]/25 via-[#132219]/5 to-transparent pointer-events-none"
               aria-hidden="true"
             />
+            {isLocked && (
+              <div
+                aria-hidden="true"
+                className="absolute inset-0 flex items-center justify-center bg-[#0F1E15]/20 backdrop-blur-[1px]"
+              >
+                <span className="w-11 h-11 rounded-2xl bg-white/90 shadow-md flex items-center justify-center text-[#B45309]">
+                  <Lock className="w-5 h-5" />
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="p-5 sm:p-6 space-y-2.5">
@@ -280,6 +310,12 @@ export const CourseCarouselSection: React.FC<CourseCarouselSectionProps> = ({
                   <span className="font-semibold text-[#B45309]">খসড়া</span>
                 </>
               )}
+              {isLocked && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-semibold text-[#B45309]">প্রো মডিউল</span>
+                </>
+              )}
             </div>
 
             <h3 className="text-lg sm:text-xl font-bold text-[#132219] leading-snug line-clamp-2">
@@ -293,25 +329,26 @@ export const CourseCarouselSection: React.FC<CourseCarouselSectionProps> = ({
         </div>
 
         <div className="px-5 sm:px-6 pb-5 sm:pb-6 pt-2 space-y-4">
-          {/* Course Progress Indicator */}
+          {/* Course Progress & 5-Step Pathway Indicator */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs text-[#3F5247]">
               <span className="font-mono tabular-nums">
-                অগ্রগতি: {toBengaliDigits(completedCount)}/
-                {toBengaliDigits(course.lessons.length)} মডিউল (
-                {toBengaliDigits(pct)}%)
+                পাথওয়ে: {toBengaliDigits(pathwayStatus.completedSteps)}/৫ ধাপ · পাঠ {toBengaliDigits(completedCount)}/
+                {toBengaliDigits(course.lessons.length)} ({toBengaliDigits(pct)}%)
               </span>
               {quizRes?.passed && (
                 <span className="inline-flex items-center gap-1 font-semibold text-[#15803D]">
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>CPD সনদ অর্জিত</span>
+                  <span>CPD সনদ</span>
                 </span>
               )}
             </div>
             <div className="w-full h-2 glass-well rounded-full overflow-hidden">
               <div
                 className="h-full bg-gradient-to-r from-[#15803D] to-[#22C55E] transition-transform duration-300 origin-left"
-                style={{ transform: `scaleX(${pct / 100})` }}
+                style={{
+                  transform: `scaleX(${Math.max(pct / 100, pathwayStatus.completedSteps / 5)})`
+                }}
               />
             </div>
           </div>
@@ -327,14 +364,31 @@ export const CourseCarouselSection: React.FC<CourseCarouselSectionProps> = ({
                   setActiveIndex(index);
                   return;
                 }
+                if (isLocked && onOpenUpgradeModal) {
+                  onOpenUpgradeModal();
+                  return;
+                }
                 onOpenCourse(course.id);
               }}
-              className="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-semibold btn-3d-emerald rounded-xl whitespace-nowrap shrink-0 min-h-[42px] cursor-pointer"
+              className={`flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-xl whitespace-nowrap shrink-0 min-h-[42px] cursor-pointer ${
+                isLocked
+                  ? 'btn-3d-glass text-[#B45309] ring-1 ring-[#D97706]/40'
+                  : 'btn-3d-emerald'
+              }`}
             >
-              <PlayCircle className="w-4 h-4 shrink-0" />
-              <span>
-                {completedCount > 0 ? 'প্রশিক্ষণ চালিয়ে যান' : 'প্রশিক্ষণে প্রবেশ'}
-              </span>
+              {isLocked ? (
+                <>
+                  <Lock className="w-4 h-4 shrink-0" />
+                  <span>প্রো দিয়ে আনলক করুন</span>
+                </>
+              ) : (
+                <>
+                  <PlayCircle className="w-4 h-4 shrink-0" />
+                  <span>
+                    {completedCount > 0 ? 'প্রশিক্ষণ চালিয়ে যান' : 'প্রশিক্ষণে প্রবেশ'}
+                  </span>
+                </>
+              )}
             </button>
 
             <button
@@ -346,11 +400,17 @@ export const CourseCarouselSection: React.FC<CourseCarouselSectionProps> = ({
                   setActiveIndex(index);
                   return;
                 }
+                if (isLocked && onOpenUpgradeModal) {
+                  onOpenUpgradeModal();
+                  return;
+                }
                 onOpenQuizOrCertificate(course.id, Boolean(quizRes?.passed));
               }}
               className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-sm font-semibold text-[#132219] btn-3d-glass rounded-xl whitespace-nowrap shrink-0 min-h-[42px] cursor-pointer"
             >
-              {quizRes?.passed ? (
+              {isLocked ? (
+                <span>প্ল্যান</span>
+              ) : quizRes?.passed ? (
                 <>
                   <Award className="w-4 h-4 text-[#15803D] shrink-0" />
                   <span>সনদ</span>

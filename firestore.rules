@@ -36,8 +36,12 @@ service cloud.firestore {
       return isVerifiedUser() && request.auth.token.email == 'aayat6666@gmail.com';
     }
 
-    function isAdmin() {
-      return isBootstrappedAdminEmail()
+    function isSuperAdmin() {
+      return isBootstrappedAdminEmail();
+    }
+
+    function isModuleManager() {
+      return isSuperAdmin()
         || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
     }
 
@@ -137,11 +141,11 @@ service cloud.firestore {
         && isValidStringList(data.readMaterialIds, 50)
         && isValidStringList(data.registeredSessionIds, 50)
         && data.quizResults is map
-        && data.quizResults.size() <= 20
+        && data.quizResults.size() <= 40
         && data.unlockedAchievementDates is map
-        && data.unlockedAchievementDates.size() <= 30
+        && data.unlockedAchievementDates.size() <= 40
         && data.lessonNotes is map
-        && data.lessonNotes.size() <= 50
+        && data.lessonNotes.size() <= 80
         && data.studySecondsByDate is map
         && data.studySecondsByDate.size() <= 366
         && data.activityCountByDate is map
@@ -187,6 +191,8 @@ service cloud.firestore {
           'description',
           'lessons',
           'quiz',
+          'pathwayConfig',
+          'orderIndex',
           'published',
           'createdByUid',
           'createdAt',
@@ -225,11 +231,90 @@ service cloud.firestore {
         && data.description.size() <= 1500
         && isValidMapList(data.lessons, 25)
         && isValidMapList(data.quiz, 30)
+        && (!('pathwayConfig' in data) || data.pathwayConfig is map)
+        && (!('orderIndex' in data) || data.orderIndex is number)
         && data.published is bool
         && data.createdByUid is string
         && data.createdByUid.size() >= 1
         && data.createdByUid.size() <= 128
         && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidModuleLayout(data) {
+      return data.keys().hasAll([
+          'orderedIds',
+          'hiddenCourseIds',
+          'updatedByUid',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'orderedIds',
+          'hiddenCourseIds',
+          'updatedByUid',
+          'updatedAt'
+        ])
+        && isValidStringList(data.orderedIds, 150)
+        && isValidStringList(data.hiddenCourseIds, 150)
+        && data.updatedByUid is string
+        && data.updatedByUid.size() >= 1
+        && data.updatedByUid.size() <= 128
+        && data.updatedByUid == request.auth.uid
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAccessControl(data) {
+      return data.keys().hasAll([
+          'freeTrialDays',
+          'freeTrialMaxModules',
+          'freeTrialAllowVideos',
+          'freeTrialAllowMaterialsDownload',
+          'freeTrialAllowQuiz',
+          'freeTrialAllowCertificate',
+          'annualPriceBdt',
+          'annualDurationDays',
+          'paymentInstructions',
+          'maintenanceMode',
+          'updatedByUid',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'freeTrialDays',
+          'freeTrialMaxModules',
+          'freeTrialAllowVideos',
+          'freeTrialAllowMaterialsDownload',
+          'freeTrialAllowQuiz',
+          'freeTrialAllowCertificate',
+          'annualPriceBdt',
+          'annualDurationDays',
+          'paymentInstructions',
+          'maintenanceMode',
+          'updatedByUid',
+          'updatedAt'
+        ])
+        && data.freeTrialDays is number
+        && data.freeTrialDays >= 1
+        && data.freeTrialDays <= 60
+        && data.freeTrialMaxModules is number
+        && data.freeTrialMaxModules >= 1
+        && data.freeTrialMaxModules <= 50
+        && data.freeTrialAllowVideos is bool
+        && data.freeTrialAllowMaterialsDownload is bool
+        && data.freeTrialAllowQuiz is bool
+        && data.freeTrialAllowCertificate is bool
+        && data.annualPriceBdt is number
+        && data.annualPriceBdt >= 0
+        && data.annualPriceBdt <= 100000
+        && data.annualDurationDays is number
+        && data.annualDurationDays >= 30
+        && data.annualDurationDays <= 1095
+        && data.paymentInstructions is string
+        && data.paymentInstructions.size() <= 1000
+        && data.maintenanceMode is bool
+        && data.updatedByUid is string
+        && data.updatedByUid.size() >= 1
+        && data.updatedByUid.size() <= 128
+        && data.updatedByUid == request.auth.uid
         && data.updatedAt is timestamp;
     }
 
@@ -271,6 +356,11 @@ service cloud.firestore {
           'attachmentName',
           'attachmentContent',
           'attachmentMimeType',
+          'videoSourceType',
+          'videoUrl',
+          'videoFileName',
+          'videoFileSizeLabel',
+          'videoMimeType',
           'published',
           'createdByUid',
           'createdAt',
@@ -316,6 +406,11 @@ service cloud.firestore {
         && data.attachmentContent.size() <= 50000
         && data.attachmentMimeType is string
         && data.attachmentMimeType.size() <= 100
+        && (!('videoSourceType' in data) || (data.videoSourceType is string && (data.videoSourceType == 'none' || data.videoSourceType == 'link' || data.videoSourceType == 'upload')))
+        && (!('videoUrl' in data) || (data.videoUrl is string && data.videoUrl.size() <= 1000))
+        && (!('videoFileName' in data) || (data.videoFileName is string && data.videoFileName.size() <= 180))
+        && (!('videoFileSizeLabel' in data) || (data.videoFileSizeLabel is string && data.videoFileSizeLabel.size() <= 40))
+        && (!('videoMimeType' in data) || (data.videoMimeType is string && data.videoMimeType.size() <= 100))
         && data.published is bool
         && data.createdByUid is string
         && data.createdByUid.size() >= 1
@@ -324,11 +419,184 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidUserAccess(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'email',
+          'displayName',
+          'planTier',
+          'trialStartedAtMs',
+          'trialEndsAtMs',
+          'proActivatedAtMs',
+          'proExpiresAtMs',
+          'allowFullOverride',
+          'customNote',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'email',
+          'displayName',
+          'planTier',
+          'trialStartedAtMs',
+          'trialEndsAtMs',
+          'proActivatedAtMs',
+          'proExpiresAtMs',
+          'allowFullOverride',
+          'customNote',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.uid is string
+        && data.uid == userId
+        && isValidId(data.uid)
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 254
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 120
+        && data.planTier is string
+        && (data.planTier == 'free_trial' || data.planTier == 'annual_pro' || data.planTier == 'suspended')
+        && data.trialStartedAtMs is number
+        && data.trialStartedAtMs >= 0
+        && data.trialEndsAtMs is number
+        && data.trialEndsAtMs >= 0
+        && data.proActivatedAtMs is number
+        && data.proActivatedAtMs >= 0
+        && data.proExpiresAtMs is number
+        && data.proExpiresAtMs >= 0
+        && data.allowFullOverride is bool
+        && data.customNote is string
+        && data.customNote.size() <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPaymentRequest(data, requestId) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'userEmail',
+          'userName',
+          'method',
+          'senderPhone',
+          'transactionId',
+          'amountBdt',
+          'note',
+          'status',
+          'reviewedByUid',
+          'reviewNote',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'userId',
+          'userEmail',
+          'userName',
+          'method',
+          'senderPhone',
+          'transactionId',
+          'amountBdt',
+          'note',
+          'status',
+          'reviewedByUid',
+          'reviewNote',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.id is string
+        && data.id == requestId
+        && isValidId(data.id)
+        && data.userId is string
+        && isValidId(data.userId)
+        && data.userEmail is string
+        && data.userEmail.size() >= 3
+        && data.userEmail.size() <= 254
+        && data.userName is string
+        && data.userName.size() >= 1
+        && data.userName.size() <= 120
+        && data.method is string
+        && (data.method == 'bKash' || data.method == 'Nagad' || data.method == 'Rocket' || data.method == 'Bank')
+        && data.senderPhone is string
+        && data.senderPhone.size() >= 6
+        && data.senderPhone.size() <= 30
+        && data.transactionId is string
+        && data.transactionId.size() >= 3
+        && data.transactionId.size() <= 80
+        && data.amountBdt is number
+        && data.amountBdt >= 1
+        && data.amountBdt <= 100000
+        && data.note is string
+        && data.note.size() <= 400
+        && data.status is string
+        && (data.status == 'pending' || data.status == 'approved' || data.status == 'rejected')
+        && data.reviewedByUid is string
+        && data.reviewedByUid.size() <= 128
+        && data.reviewNote is string
+        && data.reviewNote.size() <= 400
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRole(data, adminId) {
+      return data.keys().hasAll([
+          'uid',
+          'email',
+          'displayName',
+          'role',
+          'grantedByUid',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'email',
+          'displayName',
+          'role',
+          'grantedByUid',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.uid is string
+        && data.uid == adminId
+        && isValidId(data.uid)
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 254
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 120
+        && data.role == 'module_manager'
+        && data.grantedByUid is string
+        && data.grantedByUid.size() >= 1
+        && data.grantedByUid.size() <= 128
+        && data.grantedByUid == request.auth.uid
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // 4. Collection Rules
     match /admins/{adminId} {
-      allow get: if isValidId(adminId) && isOwner(adminId);
-      allow list: if false;
-      allow write: if false;
+      allow get: if isValidId(adminId) && (isOwner(adminId) || isSuperAdmin());
+      allow list: if isBootstrappedAdminEmail();
+
+      allow create: if isValidId(adminId)
+        && isSuperAdmin()
+        && isValidAdminRole(incoming(), adminId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(adminId)
+        && isSuperAdmin()
+        && isValidAdminRole(incoming(), adminId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isValidId(adminId) && isSuperAdmin();
     }
 
     match /users/{userId} {
@@ -407,19 +675,100 @@ service cloud.firestore {
       }
     }
 
+    match /userAccess/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isSuperAdmin());
+      allow list: if isBootstrappedAdminEmail();
+
+      allow create: if isValidId(userId)
+        && isValidUserAccess(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isSuperAdmin()
+          || (
+            isOwner(userId)
+            && incoming().email == request.auth.token.email
+            && incoming().planTier == 'free_trial'
+            && incoming().proActivatedAtMs == 0
+            && incoming().proExpiresAtMs == 0
+            && incoming().allowFullOverride == false
+            && incoming().customNote == ''
+            && incoming().trialStartedAtMs <= request.time.toMillis() + 60000
+            && incoming().trialEndsAtMs <= request.time.toMillis() + 1296000000
+          )
+        );
+
+      allow update: if isValidId(userId)
+        && isSuperAdmin()
+        && isValidUserAccess(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName',
+          'planTier',
+          'trialStartedAtMs',
+          'trialEndsAtMs',
+          'proActivatedAtMs',
+          'proExpiresAtMs',
+          'allowFullOverride',
+          'customNote',
+          'updatedAt'
+        ]);
+
+      allow delete: if isValidId(userId) && isSuperAdmin();
+    }
+
+    match /paymentRequests/{requestId} {
+      allow get: if isValidId(requestId)
+        && (isSuperAdmin() || (isVerifiedUser() && existing().userId == request.auth.uid));
+
+      allow list: if isBootstrappedAdminEmail()
+        || (isVerifiedUser() && existing().userId == request.auth.uid);
+
+      allow create: if isValidId(requestId)
+        && isVerifiedUser()
+        && isValidPaymentRequest(incoming(), requestId)
+        && incoming().userId == request.auth.uid
+        && incoming().userEmail == request.auth.token.email
+        && incoming().status == 'pending'
+        && incoming().reviewedByUid == ''
+        && incoming().reviewNote == ''
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(requestId)
+        && isSuperAdmin()
+        && isValidPaymentRequest(incoming(), requestId)
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().userEmail == existing().userEmail
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().reviewedByUid == request.auth.uid
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'status',
+          'reviewedByUid',
+          'reviewNote',
+          'updatedAt'
+        ]);
+
+      allow delete: if isValidId(requestId) && isSuperAdmin();
+    }
+
     match /courses/{courseId} {
-      allow get: if isValidId(courseId) && (existing().published == true || isAdmin());
+      allow get: if isValidId(courseId) && (existing().published == true || isModuleManager());
       allow list: if existing().published == true || isBootstrappedAdminEmail();
 
       allow create: if isValidId(courseId)
-        && isAdmin()
+        && isModuleManager()
         && isValidCustomCourse(incoming(), courseId)
         && incoming().createdByUid == request.auth.uid
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
       allow update: if isValidId(courseId)
-        && isAdmin()
+        && isModuleManager()
         && isValidCustomCourse(incoming(), courseId)
         && incoming().id == existing().id
         && incoming().createdByUid == existing().createdByUid
@@ -439,26 +788,28 @@ service cloud.firestore {
           'description',
           'lessons',
           'quiz',
+          'pathwayConfig',
+          'orderIndex',
           'published',
           'updatedAt'
         ]);
 
-      allow delete: if isValidId(courseId) && isAdmin();
+      allow delete: if isValidId(courseId) && isModuleManager();
     }
 
     match /materials/{materialId} {
-      allow get: if isValidId(materialId) && (existing().published == true || isAdmin());
+      allow get: if isValidId(materialId) && (existing().published == true || isModuleManager());
       allow list: if existing().published == true || isBootstrappedAdminEmail();
 
       allow create: if isValidId(materialId)
-        && isAdmin()
+        && isModuleManager()
         && isValidUploadedMaterial(incoming(), materialId)
         && incoming().createdByUid == request.auth.uid
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
       allow update: if isValidId(materialId)
-        && isAdmin()
+        && isModuleManager()
         && isValidUploadedMaterial(incoming(), materialId)
         && incoming().id == existing().id
         && incoming().createdByUid == existing().createdByUid
@@ -479,11 +830,69 @@ service cloud.firestore {
           'attachmentName',
           'attachmentContent',
           'attachmentMimeType',
+          'videoSourceType',
+          'videoUrl',
+          'videoFileName',
+          'videoFileSizeLabel',
+          'videoMimeType',
           'published',
           'updatedAt'
         ]);
 
-      allow delete: if isValidId(materialId) && isAdmin();
+      allow delete: if isValidId(materialId) && isModuleManager();
+    }
+
+    match /siteConfig/{configId} {
+      allow get: if isValidId(configId) && (configId == 'moduleLayout' || configId == 'accessControl');
+      allow list: if false;
+
+      allow create: if isValidId(configId)
+        && incoming().updatedAt == request.time
+        && (
+          (configId == 'moduleLayout' && isModuleManager() && isValidModuleLayout(incoming()))
+          || (configId == 'accessControl' && isSuperAdmin() && isValidAccessControl(incoming()))
+        );
+
+      allow update: if isValidId(configId)
+        && incoming().updatedAt == request.time
+        && (
+          (
+            configId == 'moduleLayout'
+            && isModuleManager()
+            && isValidModuleLayout(incoming())
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'orderedIds',
+              'hiddenCourseIds',
+              'updatedByUid',
+              'updatedAt'
+            ])
+          )
+          || (
+            configId == 'accessControl'
+            && isSuperAdmin()
+            && isValidAccessControl(incoming())
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'freeTrialDays',
+              'freeTrialMaxModules',
+              'freeTrialAllowVideos',
+              'freeTrialAllowMaterialsDownload',
+              'freeTrialAllowQuiz',
+              'freeTrialAllowCertificate',
+              'annualPriceBdt',
+              'annualDurationDays',
+              'paymentInstructions',
+              'maintenanceMode',
+              'updatedByUid',
+              'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isValidId(configId)
+        && (
+          (configId == 'moduleLayout' && isModuleManager())
+          || (configId == 'accessControl' && isSuperAdmin())
+        );
     }
   }
 }
